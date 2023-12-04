@@ -1,7 +1,104 @@
 <!DOCTYPE html>
 <html><head>
 	<title>Tiny25 ISP</title>
+	<meta charset="utf-8" />
 </head><body>
-	<p>It <b>works!</b></p>
-	<script></script>
-</hody></html>
+	<p id="console">Init</p>
+	<button onclick="avr_spi.get()">SPI Get</button>
+	
+</body><script>
+	const avr_sig = { // Sig: [model, fuseset]
+		"1E910B":	["t24", "t24"],
+		"1E9207":	["t44", "t24"],
+		"1E930C":	["t84", "t24"],
+		"1E910C":	["t261", "t24"],
+		"1E9208":	["t461", "t24"],
+		"1E930D":	["t861", "t24"]
+	};
+	const avr_fuse = {
+		"t24":	[ // Set: lfuse, hfuse, efuse, lock
+			{"default": 0x62, "CKSEL": 4, "SUT": 2, "CKOUT": 1, "CKDIV8": 1},
+			{"default": 0xDF, "BODLEVEL": 3, "EESAVE": 1, "WDTON": 1, "SPIEN": 1, "DWEN": 1, "RSTDISBL": 1},
+			{"default": 0xFF, "SELFPRGEN": 1},
+			{"LB": 2}
+		]
+	};
+
+	const _ = (s) => { return document.querySelector(s); };
+	const __ = (s) => { return document.querySelectorAll(s); };
+	const log = (l) => { console.log(l); };
+	const hex = (n) => { return ('0'+(Number(n).toString(16))).slice(-2).toUpperCase(); };
+	
+	const xhr = (m, d) => { return new Promise( (resolve) => {
+		var x = new XMLHttpRequest();
+		x.open(m, d);
+		x.overrideMimeType('text/plain');
+		x.onloadend = () => resolve([x.status, x.response]);
+		x.send();
+	} ); };
+	const xhr_str = (a, f) => {
+		var d = [];
+		_xhr_str(a, d, f);
+	};
+	const _xhr_str = (a, d, f) => {
+		xhr('POST', '/'+a.shift()).then(([s, r]) => {
+			if (s != 200) {
+				_('#console').textContent = 'Error, server returns code ' + s + ': ' + r
+			} else {
+				d.push(Number(r));
+				if (a.length) {
+					_xhr_str(a, d, f);
+				} else {
+					_('#console').textContent = 'Sent';
+					f(d);
+				}
+			}
+		});
+	};
+	
+	const spi_get = () => {
+		xhr_str([0xac, 0x53, 0x00, 0x00], (d) => {
+			console.log(d);
+		});
+	};
+	const avr_spi = {
+		"get": () => {
+			_avr_spi.enable((d) => {
+				if (d[1] == 0xAC && d[2] == 0x53) {
+					log('Synched (enabled)');
+					var sig = '';
+					_avr_spi.readSig((x)=>{
+						sig += hex(x[3]);
+						_avr_spi.readSig((x)=>{
+							sig += hex(x[3]);
+							_avr_spi.readSig((x)=>{
+								sig += hex(x[3]);
+								log('Sig: ' + sig);
+								if (sig in avr_sig) {
+									_('#console').textContent = 'Model ' + avr_sig[sig][0] + ' fuse base ' + avr_sig[sig][1];
+								} else {
+									_('#console').textContent = 'Model unknown: ' + sig;
+								}
+							}, 2);
+						}, 1);
+					}, 0);
+				} else {
+					_('#console').textContent = 'AVR out of sync, failed to enter program mode'
+				}
+			});
+		}
+	};
+	const _avr_spi = {
+		"enable":	(f) => { xhr_str([0xAC, 0x53, 0x00, 0x00], (d) => { f(d); }); },
+		"earse":	(f) => { xhr_str([0xAC, 0x80, 0x00, 0x00], (d) => { f(d); }); },
+		"ready":	(f) => { xhr_str([0xF0, 0x00, 0x00, 0x00], (d) => { f(d); }); },
+		"readCodeH":	(f, a) => { xhr_str([0x28, a >> 8, a & 0xFF, 0x00], (d) => { f(d); }); },
+		"readCodeL":	(f, a) => { xhr_str([0x20, a >> 8, a & 0xFF, 0x00], (d) => { f(d); }); },
+		"readEep":	(f, a) => { xhr_str([0xA0, 0x00, a, 0x00], (d) => { f(d); }); },
+		"readLock":	(f) => { xhr_str([0x58, 0x00, 0x00, 0x00], (d) => { f(d); }); },
+		"readSig":	(f, a) => { xhr_str([0x30, 0x00, a, 0x00], (d) => { f(d); }); },
+		"readFuseL":	(f) => { xhr_str([0x50, 0x00, 0x00, 0x00], (d) => { f(d); }); },
+		"readFuseH":	(f) => { xhr_str([0x58, 0x08, 0x00, 0x00], (d) => { f(d); }); },
+		"readCal":	(f) => { xhr_str([0x38, 0x08, 0x00, 0x00], (d) => { f(d); }); }
+	};
+</script></html>

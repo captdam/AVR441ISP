@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
 
 	// Configure TTY
 	struct termios ttyBackup, ttyCurrent = {
-		.c_cflag = ISP_BAUD | CS8 | PARENB | CLOCAL | CREAD, //8-bit data with parity (to support UPDI, our ISP ignore frame error), disable modem control
+		.c_cflag = ISP_BAUD | CS8 | /*PARENB | */CLOCAL | CREAD, //8-bit data with parity (to support UPDI, our ISP ignore frame error), disable modem control
 		.c_iflag = IGNBRK | IGNPAR //Ignor line brake and parity error
 	};
 	ttyCurrent.c_cc[VTIME] = 1; //Read timeout 0.1s
@@ -66,69 +66,83 @@ int main(int argc, char* argv[]) {
 	tcsetattr(tty, TCSANOW, &ttyCurrent);
 
 	// Main
-	for(;;) {
-		int transaction = accept(tcp, NULL, NULL);
-		if (transaction < 0) {
+	for(int transaction = 0;;) {
+		char buffer[256]; // Should be small enough for PC's stack size, but large enough for our HTTP request
+		uint8_t tx, rx;
+		ssize_t size;
+
+		if (transaction >= 0)
+			close (transaction); //Close connection. No keep-alive, local socket is fast, keep-alive connection only makes our program complex
+		
+		if (transaction = accept(tcp, NULL, NULL) < 0) {
 			perror("Bad connection from TCP client");
 			continue;
 		}
-
-		char buffer[256]; // Should be small enough for PC's stack size, but large enough for our HTTP request
-		uint8_t data;
 		
-		int size = read(transaction, buffer, sizeof(buffer));
-		if (size <= 0) {
+		if (size = read(transaction, buffer, sizeof(buffer)) <= 0) {
 			perror("Bad request from TCP client");
 			continue;
 		}
 
 		// POST / PUT - ISP data
 		if (buffer[0] == 'P') {
-			if (!sscanf(buffer, "%*[^/]/%"SCNu8" ", &data)) {
+			if (!sscanf(buffer, "%*[^/]/%"SCNu8" ", &tx)) {
 				puts("Bad POTS/PUT request from TCP client: Cannot get ISP data");
 				write_echeck(transaction, "HTTP/1.1 400 Bad Request\r\nContent-Length: 19\r\n\r\nCannot get ISP data");
-			} else {
-				fprintf(stdout, ">%"PRIu8"\n", data);
-				while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); } //Get rid of remaining HTTP data
-				tcflush(tty, TCIOFLUSH);
-
-				// Send data to ISP
-				write(tty, &data, 1);
-				tcdrain(tty);
-
-				// Receive data from ISP: Response client with the data from ISP
-				if (read(tty, &data, 1) > 0) {
-					fprintf(stdout, "<%"PRIu8"\n", data);
-					snprintf(buffer, sizeof(buffer), "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n%3"PRIu8, data);
-					write_echeck(transaction, buffer);
-				
-				// No response from ISP or error read ISP
-				} else {
-					puts(">ISP ERROR");
-					write_echeck(transaction, "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 11\r\n\r\nISP offline");
-				}
+				continue;
 			}
+
+			fprintf(stdout, ">0x%X (%"PRIu8")\n", tx, tx);
+			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); } //Get rid of remaining HTTP data
+			tcflush(tty, TCIOFLUSH);
+
+			// Send data to ISP
+			write(tty, &tx, 1);
+			tcdrain(tty);
+
+			// Receive data from ISP - echo
+			if (read(tty, &rx, 1) != 1) {
+				puts(">ISP ERROR");
+				write_echeck(transaction, "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 18\r\n\r\nISP offline - echo");
+				continue;
+			}
+
+			if (rx != tx) {
+				fprintf(stdout, "ISP echo mismatched, send %2X, echo %2X", tx, rx);
+				write_echeck(transaction, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 31\r\n\r\nEcho mismatched: send %2X get %2X");
+				continue;
+			}
+
+			// Receive data from ISP - AVR
+			if (read(tty, &rx, 1) != 1) {
+				puts(">ISP ERROR");
+				write_echeck(transaction, "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 17\r\n\r\nISP offline - avr");
+				continue;
+			}
+
+			fprintf(stdout, "<0x%X (%"PRIu8")\n", rx, rx);
+			snprintf(buffer, sizeof(buffer), "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n%3"PRIu8, rx);
+			write_echeck(transaction, buffer);
+			continue;
+		}
 			
 		// GET - Index page
-		} else if (buffer[0] == 'G') {
+		if (buffer[0] == 'G') {
 			puts("Request index page");
 			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
 
 			#include "index.h"
 			write_echeck(transaction, __index_http);
-		
-		// Others - Close program
-		} else {
-			puts("Request to halt program");
-			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
-
-			write_echeck(transaction, "HTTP/1.1 410 Gone\r\nContent-Length: 12\r\n\r\nService halt");
-			close(transaction);
-			break;
+			continue;
 		}
 		
-		// Close connection. No keep-alive, local socket is fast, keep-alive connection only makes our program complex
+		// Others - Close program
+		puts("Request to halt program");
+		while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
+
+		write_echeck(transaction, "HTTP/1.1 410 Gone\r\nContent-Length: 12\r\n\r\nService halt");
 		close(transaction);
+		break;
 	}
 	tcsetattr(tty, TCSANOW, &ttyBackup);
 
