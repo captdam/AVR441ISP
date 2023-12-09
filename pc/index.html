@@ -4,30 +4,164 @@
 	<meta charset="utf-8" />
 </head><body>
 	<p id="console">Init</p>
-	<button onclick="avr_spi.get()">SPI Get</button>
-	
+	<button width="33%" onclick="xhr_delete()">Halt</button>
+	<button width="33%" onclick="avr_spi.getModel()">SPI Get</button>
+	<button width="33%" onclick="_avr_spi.earse()">SPI Earse</button>
+	<div id="main"></div>
 </body><script>
 	const avr_sig = { // Sig: [model, fuseset]
 		"1E910B":	["t24", "t24"],
 		"1E9207":	["t44", "t24"],
 		"1E930C":	["t84", "t24"],
+		"1E9108":	["t25", "t24"],
+		"1E9206":	["t45", "t24"],
+		"1E930B":	["t85", "t24"],
 		"1E910C":	["t261", "t24"],
 		"1E9208":	["t461", "t24"],
 		"1E930D":	["t861", "t24"]
 	};
 	const avr_fuse = {
-		"t24":	[ // Set: lfuse, hfuse, efuse, lock
-			{"default": 0x62, "CKSEL": 4, "SUT": 2, "CKOUT": 1, "CKDIV8": 1},
-			{"default": 0xDF, "BODLEVEL": 3, "EESAVE": 1, "WDTON": 1, "SPIEN": 1, "DWEN": 1, "RSTDISBL": 1},
-			{"default": 0xFF, "SELFPRGEN": 1},
-			{"LB": 2}
-		]
+		"t24": {
+			'lock': {'default': 0xFF, '-': 6, "LB": 2},
+			'efuse': {'default': 0xFF, '-': 7, "SELFPRGEN": 1},
+			'hfuse': {'default': 0xDF, 'RSTDISBL': 1, 'DWEN': 1, 'SPIEN': 1, 'WDTON': 1, 'EESAVE': 1, 'BODLEVEL': 3},
+			'lfuse': {'default': 0x62, 'CKDIV8': 1, 'CKOUT': 1, 'SUT': 2, 'CKSEL': 4},
+		}
+	};
+
+	var MODEL = '';
+	var FUSE = {};
+	
+	const avr_spi = {
+		"getModel": () => { _avr_spi.enable().then( () => {
+			var sig = '';
+			recurve([
+				[_avr_spi.readSig, [0], null],
+				[_avr_spi.readSig, [1], null],
+				[_avr_spi.readSig, [2], null]
+			], (x) => {
+				sig += dec2hex(x[3]);
+			}, (x) => {
+				if (sig in avr_sig) {
+					MODEL = avr_sig[sig][0];
+					FUSE = avr_fuse[avr_sig[sig][1]];
+
+					_('#console').textContent = 'Model ' + MODEL + ' (' + sig + ') fuse base ' + avr_sig[sig][1];
+					removeAllChild(_('#main'));
+
+					var efuseHeader = [{'tag': 'th', 'textContent': 'EXT FUSE ' + dec2hex(FUSE.efuse.default)}];
+					var efuseRead = [{'tag': 'td', id: 'readEFUSE', 'textContent': 'READ'}];
+					var efuseWrite = [{'tag': 'td', id: 'writeEFUSE', 'textContent': 'WRITE'}];
+					for (key in FUSE.efuse) {
+						if (key == 'default') continue;
+						efuseHeader.push({'tag': 'th', 'colspan': FUSE.efuse[key], 'textContent': key});
+						efuseRead.push({'tag': 'td', 'colspan': FUSE.efuse[key], 'child': [{'tag': 'input', id: 'readEFUSE_'+key, 'disabled': true}]});
+						efuseWrite.push({'tag': 'td', 'colspan': FUSE.efuse[key], 'child': [{'tag': 'input', id: 'writeEFUSE_'+key}]});
+					}
+
+					var hfuseHeader = [{'tag': 'th', 'textContent': 'HIGH FUSE ' + dec2hex(FUSE.hfuse.default)}];
+					var hfuseRead = [{'tag': 'td', id: 'readHFUSE', 'textContent': 'READ'}];
+					var hfuseWrite = [{'tag': 'td', id: 'writeHFUSE', 'textContent': 'WRITE'}];
+					for (key in FUSE.hfuse) {
+						if (key == 'default') continue;
+						hfuseHeader.push({'tag': 'th', 'colspan': FUSE.hfuse[key], 'textContent': key});
+						hfuseRead.push({'tag': 'td', 'colspan': FUSE.hfuse[key], 'child': [{'tag': 'input', id: 'readHFUSE_'+key, 'disabled': true}]});
+						hfuseWrite.push({'tag': 'td', 'colspan': FUSE.hfuse[key], 'child': [{'tag': 'input', id: 'writeHFUSE_'+key}]});
+					}
+
+					var lfuseHeader = [{'tag': 'th', 'textContent': 'LOW FUSE ' + dec2hex(FUSE.lfuse.default)}];
+					var lfuseRead = [{'tag': 'td', id: 'readLFUSE', 'textContent': 'READ'}];
+					var lfuseWrite = [{'tag': 'td', id: 'writeLFUSE', 'textContent': 'WRITE'}];
+					for (key in FUSE.lfuse) {
+						if (key == 'default') continue;
+						lfuseHeader.push({'tag': 'th', 'colspan': FUSE.lfuse[key], 'textContent': key});
+						lfuseRead.push({'tag': 'td', 'colspan': FUSE.lfuse[key], 'child': [{'tag': 'input', id: 'readLFUSE_'+key, 'disabled': true}]});
+						lfuseWrite.push({'tag': 'td', 'colspan': FUSE.lfuse[key], 'child': [{'tag': 'input', id: 'writeLFUSE_'+key}]});
+					}
+
+					_('#main').appendChild(domStructure({'tag': 'table', 'child': [ {'tag': 'tbody', 'child': [
+						{'tag': 'tr', 'child': [ {'tag': 'th', 'colspan': '9', 'textContent': avr_sig[sig][0]} ]},
+						{'tag': 'tr', 'child': [ {'tag': 'td', 'textContent': 'Name'}, 
+							{'tag': 'td', 'textContent': '7'}, {'tag': 'td', 'textContent': '6'}, {'tag': 'td', 'textContent': '5'}, {'tag': 'td', 'textContent': '4'},
+							{'tag': 'td', 'textContent': '3'}, {'tag': 'td', 'textContent': '2'}, {'tag': 'td', 'textContent': '1'}, {'tag': 'td', 'textContent': '0'}
+						]},
+						{'tag': 'tr', 'child': efuseHeader},
+						{'tag': 'tr', 'child': efuseRead},
+						{'tag': 'tr', 'child': efuseWrite},
+						{'tag': 'tr', 'child': hfuseHeader},
+						{'tag': 'tr', 'child': hfuseRead},
+						{'tag': 'tr', 'child': hfuseWrite},
+						{'tag': 'tr', 'child': lfuseHeader},
+						{'tag': 'tr', 'child': lfuseRead},
+						{'tag': 'tr', 'child': lfuseWrite}
+					] } ] }));
+					_('#readEFUSE').onclick = () => {avr_spi.getFuseE(); };
+					_('#readHFUSE').onclick = () => {avr_spi.getFuseH(); };
+					_('#readLFUSE').onclick = () => {avr_spi.getFuseL(); };
+
+				} else {
+					_('#console').textContent = 'Model unknown: ' + sig;
+				}
+			});
+		}); },
+		"getFuseE": () => { _avr_spi.enable().then( () => {
+			_avr_spi.readFuseE().then( (x) => {
+				x = x[3];
+				_('#readEFUSE').textContent = 'READ ' + dec2hex(x);
+				_('#console').textContent = 'Ext fuse: '+ dec2hex(x);
+				for (key in FUSE.efuse) {
+					if (key == 'default') continue;
+					x = x << FUSE.efuse[key];
+					_('#readEFUSE_'+key).value = dec2hex((x & 0xFF00) >> 8);
+					x = x & 0xFF;
+				}
+			} );
+		}); },
+		"getFuseH": () => { _avr_spi.enable().then( () => {
+			_avr_spi.readFuseH().then( (x) => {
+				x = x[3];
+				_('#readHFUSE').textContent = 'READ ' + dec2hex(x);
+				_('#console').textContent = 'High fuse: '+ dec2hex(x);
+				for (key in FUSE.hfuse) {
+					if (key == 'default') continue;
+					x = x << FUSE.hfuse[key];
+					_('#readHFUSE_'+key).value = dec2hex((x & 0xFF00) >> 8);
+					x = x & 0xFF;
+				}
+			} );
+		}); },
+		"getFuseL": () => { _avr_spi.enable().then( () => {
+			_avr_spi.readFuseL().then( (x) => {
+				x = x[3];
+				_('#readLFUSE').textContent = 'READ ' + dec2hex(x);
+				_('#console').textContent = 'Low fuse: '+ dec2hex(x);
+				for (key in FUSE.lfuse) {
+					if (key == 'default') continue;
+					x = x << FUSE.lfuse[key];
+					_('#readLFUSE_'+key).value = dec2hex((x & 0xFF00) >> 8);
+					x = x & 0xFF;
+				}
+			} );
+		}); }
+	};
+	const _avr_spi = {
+		"enable":	() => { return xhr_put(0xAC530000); },
+		"earse":	() => { return xhr_put(0xAC800000); },
+		"ready":	() => { return xhr_put(0xF00000FF); },
+		"readCodeH":	(a) => { return xhr_put(0x280000FF | a << 8); },
+		"readCodeL":	(a) => { return xhr_put(0x200000FF | a << 8); },
+		"readEep":	(a) => { return xhr_put(0xA00000FF | a << 8); },
+		"readLock":	() => { return xhr_put(0x580000FF); },
+		"readSig":	(a) => { return xhr_put(0x300000FF | a << 8); },
+		"readFuseL":	() => { return xhr_put(0x500000FF); },
+		"readFuseH":	() => { return xhr_put(0x580800FF); },
+		"readFuseE":	() => { return xhr_put(0x500800FF); },
+		"readCal":	() => { return xhr_put(0x380000FF); }
 	};
 
 	const _ = (s) => { return document.querySelector(s); };
 	const __ = (s) => { return document.querySelectorAll(s); };
-	const log = (l) => { console.log(l); };
-	const hex = (n) => { return ('0'+(Number(n).toString(16))).slice(-2).toUpperCase(); };
+	const dec2hex = (n) => { return ('0'+(Number(n).toString(16))).slice(-2).toUpperCase(); };
 	
 	const xhr = (m, d) => { return new Promise( (resolve) => {
 		var x = new XMLHttpRequest();
@@ -36,69 +170,76 @@
 		x.onloadend = () => resolve([x.status, x.response]);
 		x.send();
 	} ); };
-	const xhr_str = (a, f) => {
-		var d = [];
-		_xhr_str(a, d, f);
-	};
-	const _xhr_str = (a, d, f) => {
-		xhr('POST', '/'+a.shift()).then(([s, r]) => {
+	const xhr_put = (a) => { return new Promise( (resolve) => {
+		xhr('PUT', '/'+a).then(([s, r]) => {
 			if (s != 200) {
 				_('#console').textContent = 'Error, server returns code ' + s + ': ' + r
 			} else {
-				d.push(Number(r));
-				if (a.length) {
-					_xhr_str(a, d, f);
-				} else {
-					_('#console').textContent = 'Sent';
-					f(d);
-				}
+				var res = Number(r);
+				res = [res >> 24, (res >> 16) & 0xFF, (res >> 8) & 0xFF, res & 0xFF];
+				/*if ( ((a & 0xFF000000) >> 24 != res [1]) || ((a & 0x00FF0000) >> 16 != res[2]) )
+					_('#console').textContent = 'AVR out of sync, cmd echo mismatched';
+				else*/
+					resolve(res);
 			}
 		});
-	};
-	
-	const spi_get = () => {
-		xhr_str([0xac, 0x53, 0x00, 0x00], (d) => {
-			console.log(d);
+	} ); };
+	const xhr_delete = () => { // To close the server
+		xhr('DELETE', '').then(([s, r]) => {
+			_('#console').textContent = s == 410 ? 'Server closed' : 'Error, cannot close server (' + s + '): ' + r;
 		});
 	};
-	const avr_spi = {
-		"get": () => {
-			_avr_spi.enable((d) => {
-				if (d[1] == 0xAC && d[2] == 0x53) {
-					log('Synched (enabled)');
-					var sig = '';
-					_avr_spi.readSig((x)=>{
-						sig += hex(x[3]);
-						_avr_spi.readSig((x)=>{
-							sig += hex(x[3]);
-							_avr_spi.readSig((x)=>{
-								sig += hex(x[3]);
-								log('Sig: ' + sig);
-								if (sig in avr_sig) {
-									_('#console').textContent = 'Model ' + avr_sig[sig][0] + ' fuse base ' + avr_sig[sig][1];
-								} else {
-									_('#console').textContent = 'Model unknown: ' + sig;
-								}
-							}, 2);
-						}, 1);
-					}, 0);
-				} else {
-					_('#console').textContent = 'AVR out of sync, failed to enter program mode'
-				}
-			});
+
+	const recurve = (quene, frecv, flast) => {
+		if (quene.length) {
+			var q = quene.shift();
+			q[0].apply(null, q[1]).then( (x) => {
+				if (typeof q[2] == 'function') q[2](x);
+				if (typeof frecv == 'function') frecv(x);
+				recurve(quene, frecv, flast);
+			} );
+		} else {
+			if (typeof flast == 'function') flast();
 		}
+		
+
 	};
-	const _avr_spi = {
-		"enable":	(f) => { xhr_str([0xAC, 0x53, 0x00, 0x00], (d) => { f(d); }); },
-		"earse":	(f) => { xhr_str([0xAC, 0x80, 0x00, 0x00], (d) => { f(d); }); },
-		"ready":	(f) => { xhr_str([0xF0, 0x00, 0x00, 0x00], (d) => { f(d); }); },
-		"readCodeH":	(f, a) => { xhr_str([0x28, a >> 8, a & 0xFF, 0x00], (d) => { f(d); }); },
-		"readCodeL":	(f, a) => { xhr_str([0x20, a >> 8, a & 0xFF, 0x00], (d) => { f(d); }); },
-		"readEep":	(f, a) => { xhr_str([0xA0, 0x00, a, 0x00], (d) => { f(d); }); },
-		"readLock":	(f) => { xhr_str([0x58, 0x00, 0x00, 0x00], (d) => { f(d); }); },
-		"readSig":	(f, a) => { xhr_str([0x30, 0x00, a, 0x00], (d) => { f(d); }); },
-		"readFuseL":	(f) => { xhr_str([0x50, 0x00, 0x00, 0x00], (d) => { f(d); }); },
-		"readFuseH":	(f) => { xhr_str([0x58, 0x08, 0x00, 0x00], (d) => { f(d); }); },
-		"readCal":	(f) => { xhr_str([0x38, 0x08, 0x00, 0x00], (d) => { f(d); }); }
+
+	const removeAllChild = (node) => { while(node.lastChild) node.lastChild.remove(); };
+	const createElement = (tag,content) => { var x = document.createElement(tag); x.textContent = content ?? ''; return x; };
+	const domStructure = (struct) => {
+		var x = createElement(struct.tag, null);
+		for (const key in struct) {
+			if (key == 'tag')
+				continue;
+			else if (key == 'child')
+				struct.child.map( y => x.appendChild(domStructure(y)) );
+			else if (key == 'class')
+				x.classList = struct[key];
+			else {
+				x[key] = struct[key];
+				x.setAttribute(key, struct[key]);
+			}
+		}
+		return x;
 	};
-</script></html>
+</script><style>
+	table {
+		width: 100%;
+	}
+	tr > * {
+		padding: 4px 12px;
+		max-width: 0;
+		text-align: center;
+		border: solid black 1px;
+	}
+	table input {
+		width: 100%;
+		text-align: center;
+	}
+	table button {
+		width: 100%;
+		text-align: center;
+	}
+	#readEFUSE:hover, #readHFUSE:hover, #readLFUSE:hover {cursor: pointer;}
+</style></html>
