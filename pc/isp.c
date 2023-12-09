@@ -21,20 +21,6 @@ void tcp_writecheck(int fd, char* data) {
 		perror("Fail to reply to TCP client");
 }
 
-/** Hot load HTML file to create a HTTP response (for dev use). 
- * This function will assume malloc always success. 
- * @param file HTML file name
- * 
-*/
-void tcp_sendfile(const char* html) {
-	FILE* fd = fopen(html, "R");
-	fseek(fd, 0, SEEK_END);
-	long fsize = ftell(fd);
-	rewind(fd);
-
-	char* d = malloc(ftell(fd));
-}
-
 /** Send a byte through tty. 
  * If success, return NULL and write the rx value into rx; if failed, return a pointer to the error message. 
  * @param tty TTY file descriptor

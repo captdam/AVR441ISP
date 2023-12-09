@@ -29,3 +29,5 @@ Click any button on this page will send ```PUT``` request to the server. The ser
 The first step is to use "SPI Get" to enable programming and read signature bytes from the target AVR. If the signature matches with a known on in the configuration JSON, this program will display a table of the NVME ofthe target AVR. Use "X READ" to read each of them (example, read hfuse), the program will read the specific data from the target AVR and display them in the table.
 
 To porperly close the program, use the "Halt". This will send a ```DELETE``` request which request the server to exit. After this operation, you must restart the server-side program and refresh the client-side page to use this software again.
+
+![Program running](screenshot.png)
