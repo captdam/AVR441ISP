@@ -2,7 +2,7 @@
 #define PIN_DO 1
 #define PIN_CK 2
 #define PIN_UART 3
-#define PIN_UCLK 4
+#define PIN_LED 4
 #define UART_DELAY 104 // 1MHz / 9600BAUD = 104.16667 cycles
 
 #include <avr/io.h>
@@ -12,7 +12,7 @@ void uart_tx(uint8_t data);
 uint8_t uart_rx();
 
 void main(void) {
-	PORTB = (1<<PIN_UART); // Pull-up for idle state
+	PORTB = (1<<PIN_UART) | (1<<PIN_DI); // Pull-up for idle state, pull-up for input level shifter
 	DDRB = (1<<PIN_CK) | (1<<PIN_DO); // SPI output
 
 	TCCR0A = (2<<CS00); // CTC mode with OCR0A
@@ -27,9 +27,15 @@ void main(void) {
 }
 
 uint8_t spi(uint8_t data) {
+	TCNT0 = 0; // Reset and start timer at clk/1 (1MHz)
+	TIFR = (1<<OCF0A);
+	TCCR0B = (1<<CS00);
+
 	USIDR = data;
 	USISR = (1<<USIOIF);
 	do {
+		while (!( TIFR & (1<<OCF0A) ));
+		TIFR = (1<<OCF0A);
 		USICR = (1<<USIWM0) | (1<<USICS1) | (1<<USICLK) | (1<<USITC);
 	} while (!( USISR & (1<<USIOIF) ));
 	return USIDR;
@@ -37,7 +43,7 @@ uint8_t spi(uint8_t data) {
 
 /* Low speed UART TX */
 void uart_tx(uint8_t data) {
-	TCNT0 = 0; // Reset and start timer at clk/1 (1MHz), UART drive mode
+	TCNT0 = 0; // Reset and start timer, UART drive mode
 	TIFR = (1<<OCF0A);
 	TCCR0B = (1<<CS00);
 	DDRB |= (1<<PIN_UART);
