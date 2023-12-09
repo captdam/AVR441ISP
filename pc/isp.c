@@ -11,7 +11,52 @@
 
 #define ISP_BAUD B9600
 
-void write_echeck(int fd, char* data) { if (write(fd, data, strlen(data)) < 0) perror("Fail to reply to TCP client"); }
+/** TCP write with error check. 
+ * Write data to client; in case of any error, print error message. 
+ * @param fd TCP file descriptor
+ * @param data Data (0 terminated string) to write
+*/
+void tcp_writecheck(int fd, char* data) {
+	if (write(fd, data, strlen(data)) < 0)
+		perror("Fail to reply to TCP client");
+}
+
+/** Hot load HTML file to create a HTTP response (for dev use). 
+ * This function will assume malloc always success. 
+ * @param file HTML file name
+ * 
+*/
+void tcp_sendfile(const char* html) {
+	FILE* fd = fopen(html, "R");
+	fseek(fd, 0, SEEK_END);
+	long fsize = ftell(fd);
+	rewind(fd);
+
+	char* d = malloc(ftell(fd));
+}
+
+/** Send a byte through tty. 
+ * If success, return NULL and write the rx value into rx; if failed, return a pointer to the error message. 
+ * @param tty TTY file descriptor
+ * @param tx Data to send
+ * @param rx Data returned from tty (if success, this is value from tty device; if failed with mismatch echo, this is the bad echo)
+ * @return NULL if success, otherwise pointer to error message (error message if always 13 character + 1 0-terminator, 14 bytes in tital)
+*/
+const char* tty_send(int tty, uint8_t tx, uint8_t* rx) {
+	int whatever = write(tty, &tx, 1);
+	tcdrain(tty);
+
+	if (read(tty, rx, 1) != 1)
+		return "Echo timedout";
+
+	if (*rx != tx)
+		return "Echo mismatch";
+
+	if (read(tty, rx, 1) != 1)
+		return "Data timedout";
+
+	return NULL;
+}
 
 
 int main(int argc, char* argv[]) {
@@ -68,7 +113,6 @@ int main(int argc, char* argv[]) {
 	// Main
 	for(int transaction = 0;;) {
 		char buffer[256]; // Should be small enough for PC's stack size, but large enough for our HTTP request
-		uint8_t tx, rx;
 		ssize_t size;
 
 		if (transaction >= 0)
@@ -86,43 +130,51 @@ int main(int argc, char* argv[]) {
 
 		// POST / PUT - ISP data
 		if (buffer[0] == 'P') {
-			if (!sscanf(buffer, "%*[^/]/%"SCNu8" ", &tx)) {
+			uint32_t tx, rx = 0;
+			if (!sscanf(buffer, "%*[^/]/%"SCNu32" ", &tx)) {
 				puts("Bad POTS/PUT request from TCP client: Cannot get ISP data");
-				write_echeck(transaction, "HTTP/1.1 400 Bad Request\r\nContent-Length: 19\r\n\r\nCannot get ISP data");
+				tcp_writecheck(transaction, "HTTP/1.1 400 Bad Request\r\nContent-Length: 19\r\n\r\nCannot get ISP data");
 				continue;
 			}
 
-			fprintf(stdout, ">0x%X (%"PRIu8")\n", tx, tx);
+			fprintf(stdout, ">0x%08X\n", tx);
 			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); } //Get rid of remaining HTTP data
 			tcflush(tty, TCIOFLUSH);
+			uint8_t t, r;
+			const char* info;
+			const char* message = "ISP error: %s >0x%02X, <0x%02X\n";
 
-			// Send data to ISP
-			write(tty, &tx, 1);
-			tcdrain(tty);
-
-			// Receive data from ISP - echo
-			if (read(tty, &rx, 1) != 1) {
-				puts(">ISP ERROR");
-				write_echeck(transaction, "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 18\r\n\r\nISP offline - echo");
+			t = (tx & 0xFF000000) >> 24;
+			if (info = tty_send(tty, t, &r)) {
+				fprintf(stdout, message, info, t, r);
 				continue;
 			}
+			rx |= r << 24;
 
-			if (rx != tx) {
-				fprintf(stdout, "ISP echo mismatched, send %2X, echo %2X", tx, rx);
-				write_echeck(transaction, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 31\r\n\r\nEcho mismatched: send %2X get %2X");
+			t = (tx & 0x00FF0000) >> 16;
+			if (info = tty_send(tty, t, &r)) {
+				fprintf(stdout, message, info, t, r);
 				continue;
 			}
+			rx |= r << 16;
 
-			// Receive data from ISP - AVR
-			if (read(tty, &rx, 1) != 1) {
-				puts(">ISP ERROR");
-				write_echeck(transaction, "HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 17\r\n\r\nISP offline - avr");
+			t = (tx & 0x0000FF00) >> 8;
+			if (info = tty_send(tty, t, &r)) {
+				fprintf(stdout, message, info, t, r);
 				continue;
 			}
+			rx |= r << 8;
 
-			fprintf(stdout, "<0x%X (%"PRIu8")\n", rx, rx);
-			snprintf(buffer, sizeof(buffer), "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\n%3"PRIu8, rx);
-			write_echeck(transaction, buffer);
+			t = tx & 0x000000FF;
+			if (info = tty_send(tty, t, &r)) {
+				fprintf(stdout, message, info, t, r);
+				continue;
+			}
+			rx |= r;
+
+			fprintf(stdout, "<0x%08X\n", rx);
+			snprintf(buffer, sizeof(buffer), "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0x%08X", rx);
+			tcp_writecheck(transaction, buffer);
 			continue;
 		}
 			
@@ -132,7 +184,7 @@ int main(int argc, char* argv[]) {
 			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
 
 			#include "index.h"
-			write_echeck(transaction, __index_http);
+			tcp_writecheck(transaction, __index_http);
 			continue;
 		}
 		
@@ -140,7 +192,7 @@ int main(int argc, char* argv[]) {
 		puts("Request to halt program");
 		while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
 
-		write_echeck(transaction, "HTTP/1.1 410 Gone\r\nContent-Length: 12\r\n\r\nService halt");
+		tcp_writecheck(transaction, "HTTP/1.1 410 Gone\r\nContent-Length: 12\r\n\r\nService halt");
 		close(transaction);
 		break;
 	}
