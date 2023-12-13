@@ -4,22 +4,13 @@
 #include <string.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <termios.h>
-#include <arpa/inet.h> 
-#include <netinet/in.h> 
+#include "http.h"
 
 #define ISP_BAUD B9600
-
-/** TCP write with error check. 
- * Write data to client; in case of any error, print error message. 
- * @param fd TCP file descriptor
- * @param data Data (0 terminated string) to write
-*/
-void tcp_writecheck(int fd, char* data) {
-	if (write(fd, data, strlen(data)) < 0)
-		perror("Fail to reply to TCP client");
-}
 
 /** Send a byte through tty. 
  * If success, return NULL and write the rx value into rx; if failed, return a pointer to the error message. 
@@ -63,27 +54,8 @@ int main(int argc, char* argv[]) {
 		goto exit;
 	}
 	
-	// Open TCP server
 	fprintf(stderr, "Open server on tcp://localhost:%s (http)\n", argv[2]);
-	int tcp = socket(AF_INET, SOCK_STREAM, 0);
-	if (tcp < 0) {
-		perror("Cannot open TCP");
-		goto exit;
-	}
-	struct sockaddr_in tcpServer = {
-		.sin_family = AF_INET,
-		.sin_port = htons(atoi(argv[2])),
-		.sin_addr.s_addr = INADDR_ANY
-	};
-	if (bind(tcp, (struct sockaddr*)&tcpServer, sizeof(tcpServer)) < 0) {
-		perror("Cannot bind TCP socket");
-		goto exit;
-	}
-	fputs("Start to listen on TCP\n", stderr);
-	if (listen(tcp, 1) < 0) {
-		perror("Fail to start to listen on TCP");
-		goto exit;
-	}
+	http_init(atoi(argv[2]));
 
 	// Configure TTY
 	struct termios ttyBackup, ttyCurrent = {
@@ -97,99 +69,124 @@ int main(int argc, char* argv[]) {
 	tcsetattr(tty, TCSANOW, &ttyCurrent);
 
 	// Main
-	for(int transaction = 0;;) {
-		char buffer[256]; // Should be small enough for PC's stack size, but large enough for our HTTP request
-		ssize_t size;
-
-		if (transaction >= 0)
-			close (transaction); //Close connection. No keep-alive, local socket is fast, keep-alive connection only makes our program complex
-		
-		if (transaction = accept(tcp, NULL, NULL) < 0) {
-			perror("Bad connection from TCP client");
+	for(;;) {
+		char* transaction_method;
+		char* transaction_data;
+		int transaction = http_receive(&transaction_method, &transaction_data);
+		if (transaction < 0) {
 			continue;
-		}
-		
-		if (size = read(transaction, buffer, sizeof(buffer)) <= 0) {
-			perror("Bad request from TCP client");
+		} else if (!transaction_method || !transaction_data) {
+			puts("Bad request from TCP client: Cannot get method / data");
+			http_send(transaction, "400 Bad Request", "Cannot get method / data", 25);
 			continue;
+		} else if (transaction_method[0] == 'D') {
+			puts("Request to halt program");
+			http_send(transaction, "410 Gone", "Server halt", 11);
+			close(transaction);
+			break;
 		}
 
 		// POST / PUT - ISP data
-		if (buffer[0] == 'P') {
+		if (transaction_method[0] == 'P') {
 			uint32_t tx, rx = 0;
-			if (!sscanf(buffer, "%*[^/]/%"SCNu32" ", &tx)) {
+			if (!sscanf(transaction_data, "/%"SCNu32" ", &tx)) {
 				puts("Bad POTS/PUT request from TCP client: Cannot get ISP data");
-				tcp_writecheck(transaction, "HTTP/1.1 400 Bad Request\r\nContent-Length: 19\r\n\r\nCannot get ISP data");
+				http_send(transaction, "400 Bad Request", "Cannot get ISP data", 19);
 				continue;
 			}
 
 			fprintf(stdout, ">0x%08X\n", tx);
-			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); } //Get rid of remaining HTTP data
 			tcflush(tty, TCIOFLUSH);
 			uint8_t t, r;
 			const char* info;
-			const char* message = "ISP error: %s >0x%02X, <0x%02X\n";
+			char buffer[64];
 
 			t = (tx & 0xFF000000) >> 24;
 			if (info = tty_send(tty, t, &r)) {
-				fprintf(stdout, message, info, t, r);
+				snprintf(buffer, sizeof(buffer), "ISP error (byte 0): %s >0x%02X, <0x%02X", info, t, r);
+				puts(buffer);
+				http_send(transaction, "502 Gateway Error", buffer, strlen(buffer));
 				continue;
 			}
 			rx |= r << 24;
 
 			t = (tx & 0x00FF0000) >> 16;
 			if (info = tty_send(tty, t, &r)) {
-				fprintf(stdout, message, info, t, r);
+				snprintf(buffer, sizeof(buffer), "ISP error (byte 1): %s >0x%02X, <0x%02X", info, t, r);
+				puts(buffer);
+				http_send(transaction, "502 Gateway Error", buffer, strlen(buffer));
 				continue;
 			}
 			rx |= r << 16;
 
 			t = (tx & 0x0000FF00) >> 8;
 			if (info = tty_send(tty, t, &r)) {
-				fprintf(stdout, message, info, t, r);
+				snprintf(buffer, sizeof(buffer), "ISP error (byte 2): %s >0x%02X, <0x%02X", info, t, r);
+				puts(buffer);
+				http_send(transaction, "502 Gateway Error", buffer, strlen(buffer));
 				continue;
 			}
 			rx |= r << 8;
 
 			t = tx & 0x000000FF;
 			if (info = tty_send(tty, t, &r)) {
-				fprintf(stdout, message, info, t, r);
+				snprintf(buffer, sizeof(buffer), "ISP error (byte 3): %s >0x%02X, <0x%02X", info, t, r);
+				puts(buffer);
+				http_send(transaction, "502 Gateway Error", buffer, strlen(buffer));
 				continue;
 			}
 			rx |= r;
 
 			fprintf(stdout, "<0x%08X\n", rx);
-			snprintf(buffer, sizeof(buffer), "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\n0x%08X", rx);
-			tcp_writecheck(transaction, buffer);
-			continue;
-		}
+			snprintf(buffer, sizeof(buffer), "0x%08X", rx);
+			http_send(transaction, "200 OK", buffer, 10);
 			
 		// GET - Index page
-		if (buffer[0] == 'G') {
-			puts("Request index page");
-			while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
+		} else if (transaction_method[0] == 'G') {
+			char filename[64];
+			if (!sscanf(transaction_data, "/%s", filename)) {
+				puts("Bad GET request from TCP client: Cannot get filen ame");
+				http_send(transaction, "400 Bad Request", "Cannot get file name", 20);
+				continue;
+			}
 
-			#include "index.h"
-			tcp_writecheck(transaction, __index_http);
-			continue;
-		}
+			fprintf(stdout, "Request page: %s\n", filename);
+			int file = open(filename, O_RDONLY);
+			if (file < 0) {
+				perror("Cannot open webpage file");
+				http_send(transaction, "404 Not Found", "", 0);
+				continue;
+			}
+			struct stat fileinfo;
+			if (fstat(file, &fileinfo)) {
+				perror("Cannot get webpage info");
+				http_send(transaction, "404 Not Found", "", 0);
+				continue;
+			}
+			void* filedata = mmap(NULL, fileinfo.st_size, PROT_READ, MAP_PRIVATE, file, 0);
+			if (filedata == MAP_FAILED) {
+				perror("Cannot map webpage data");
+				http_send(transaction, "404 Not Found", "", 0);
+				continue;
+			}
+
+			fprintf(stdout, "Page OK, size: %d\n", fileinfo.st_size);
+			http_send(transaction, "200 OK", filedata, fileinfo.st_size);
+
+			if (munmap(filedata, fileinfo.st_size)) {
+				perror("Cannot unmap webpage data (error ignored)");
+			}
 		
 		// Others - Close program
-		puts("Request to halt program");
-		while (size == sizeof(buffer)) { size = read(transaction, buffer, sizeof(buffer)); }
-
-		tcp_writecheck(transaction, "HTTP/1.1 410 Gone\r\nContent-Length: 12\r\n\r\nService halt");
-		close(transaction);
-		break;
+		} else {
+			puts("Cannot understand request");
+			http_send(transaction, "501 Not Implemented", "Use GET, PUT / POST and DELETE only", 35);
+		}
 	}
 	tcsetattr(tty, TCSANOW, &ttyBackup);
 
 	exit:
-	if (tcp > 0) {
-		fputs("Close server\n", stderr);
-		close(tcp);
-		tcp = 0;
-	}
+	http_close();
 	if (tty > 0) {
 		fputs("Restore and close TTY\n", stderr);
 		close(tty);
