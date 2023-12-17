@@ -2,11 +2,13 @@
 <html><head>
 	<title>Init - Tiny25 ISP</title>
 	<meta charset="utf-8" />
+	<script src="signature.js"></script>
 </head><body>
 	<input id="docViewer_sizeCtrl" type="range" min="0" max="70" value="50" style="width:70%" oninput="_('#docViewer').style.width=this.value+'%'; _('#ispPanel').style.width=(98-this.value)+'%';"; /></input>
 	<button onclick="xhr('DELETE','').then(([s, r])=>{ if (s==410) {console.log('Server closed');_('#ispPanel').style.filter='blur(3px)';} else {console.log('Error, cannot close server ('+s+'): '+r);} });">Halt</button>
 	<button onclick="avr_spi.getModel()">SPI Get</button>
-	<button onclick="_avr_spi.earse()">SPI Earse</button>
+	<button onclick="avr_spi.earse()">SPI Earse</button>
+	<button onclick="_avr_spi.ready().then((x)=>{this.style.color=x[3]==1?'green':'red';})">SPI Ready?</button>
 	<div class="sidebyside" style="height:calc(100% - 2em);">
 		<div id="docViewer" style="width:50%;">
 			<input id="docViewer_url" style="display:block; width:100%; height:1em; margin-bottom:1px; border:none; border-radius:0; border-bottom:solid #888 2px;" placeholder="Enter URL and hit ENTER" onkeyup="if(event.keyCode==13)_('#docViewer_content').src=this.value;" />
@@ -17,21 +19,34 @@
 		</div>
 	</div>
 	
-</body><script>
-	var CURRENT_DEVICE = null;
-
-	const avr_sig = { // Sig: [model, family, codesize(words), eepsize(bytes)]
-		'1E910B':	['t24', 't24', 1024, 128],
-		'1E9207':	['t44', 't24', 2048, 256],
-		'1E930C':	['t84', 't24', 4096, 512],
-		'1E9108':	['t25', 't25', 1024, 128],
-		'1E9206':	['t45', 't25', 2048, 256],
-		'1E930B':	['t85', 't25', 4096, 512],
-		'1E910C':	['t261', 't261', 1024, 128],
-		'1E9208':	['t461', 't261', 2048, 256],
-		'1E930D':	['t861', 't261', 4096, 512]
-	};
+</body><style>
+	html, body { width: 100%; height: 100%; margin: 0; border: 0; padding: 0; }
 	
+	.sidebyside { display: flex; justify-content: space-between; }
+
+	
+	table { width: 100%; }
+	tr > * {
+		padding: 4px 12px;
+		max-width: 0;
+		border: solid black 1px;
+	}
+	table input, table select {
+		width: 100%;
+	}
+	table button {
+		width: 100%;
+		text-align: center;
+	}
+	#readEFUSE:hover, #readHFUSE:hover, #readLFUSE:hover {cursor: pointer;}
+</style><script>
+
+	/** Front-end JS. Free-to-modify */
+	window.addEventListener('load', (x) => {
+		_('#docViewer_sizeCtrl').dispatchEvent(new Event('input'));
+	});
+	
+	var CURRENT_DEVICE = null;
 	const avr_spi = {
 		'getModel': () => { _avr_spi.enable().then( () => {
 			removeAllChild(_('#main'));
@@ -69,52 +84,10 @@
 				}
 			});
 		}); },
-		'getFuse': () => { _avr_spi.enable().then( () => {
-			for (key in CURRENT_DEVICE.efuse) {
-				_('#NVME_'+key+'_R').textContent = 'Reading...';
-				_('#NVME_'+key+'_R').style.color = 'orange';
-			}
-			for (key in CURRENT_DEVICE.hfuse) {
-				_('#NVME_'+key+'_R').textContent = 'Reading...';
-				_('#NVME_'+key+'_R').style.color = 'orange';
-			}
-			for (key in CURRENT_DEVICE.lfuse) {
-				_('#NVME_'+key+'_R').textContent = 'Reading...';
-				_('#NVME_'+key+'_R').style.color = 'orange';
-			}
-			recurve([
-				[_avr_spi.readFuseE, [0], x => { x = x[3];
-					for (key in CURRENT_DEVICE.efuse) {
-						x = x << CURRENT_DEVICE.efuse[key][0];
-						var value = (x & 0xFF00) >> 8;
-						_('#NVME_'+key+'_R').textContent = '0x' + dec2hex(value);
-						_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.efuse[key][1] ? 'green' : 'red';
-						x = x & 0xFF;
-					}
-				}],
-				[_avr_spi.readFuseH, [1], x => { x = x[3];
-					for (key in CURRENT_DEVICE.hfuse) {
-						x = x << CURRENT_DEVICE.hfuse[key][0];
-						var value = (x & 0xFF00) >> 8;
-						_('#NVME_'+key+'_R').textContent = '0x' + dec2hex(value);
-						_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.hfuse[key][1] ? 'green' : 'red';
-						x = x & 0xFF;
-					}
-				}],
-				[_avr_spi.readFuseL, [2], x => { x = x[3];
-					for (key in CURRENT_DEVICE.lfuse) {
-						x = x << CURRENT_DEVICE.lfuse[key][0];
-						var value = (x & 0xFF00) >> 8;
-						_('#NVME_'+key+'_R').textContent = '0x' + dec2hex(value);
-						_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.lfuse[key][1] ? 'green' : 'red';
-						x = x & 0xFF;
-					}
-				}]
-			], (x) => {
+		'earse': () => { _avr_spi.enable().then( () => {
+			_avr_spi.earse().then( (x) => {
 				
-			}, () => {
-				
-			});
+			} );
 		}); },
 		'getLock': () => { _avr_spi.enable().then( () => {
 			for (key in CURRENT_DEVICE.lock) {
@@ -126,28 +99,119 @@
 				for (key in CURRENT_DEVICE.lock) {
 					x = x << CURRENT_DEVICE.lock[key][0];
 					var value = (x & 0xFF00) >> 8;
-					_('#NVME_'+key+'_R').textContent = '0x' + dec2hex(value);
+					_('#NVME_'+key+'_R').textContent = value;
 					_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.lock[key][1] ? 'green' : 'red';
 					x = x & 0xFF;
 				}
 			} );
+		}); },
+		'writeLock': () => { _avr_spi.enable().then( () => {
+			var lock = 0;
+			for (key in CURRENT_DEVICE.lock) {
+				if (_('#NVME_'+key+'_W').value == '-') {
+					_('#NVME_LOCK_WRITEACTION').textContent = 'SELECT ' + key + ' FIRST';
+					return;
+				}
+				lock = (lock << CURRENT_DEVICE.lock[key][0]) | _('#NVME_'+key+'_W').value;
+			}
+			_('#NVME_LOCK_WRITEACTION').textContent = 'WRITE ' + dec2hex(lock) + ' IN PROGRESS';
+			_avr_spi.writeLock(lock).then( (x) => {
+				_('#NVME_LOCK_WRITEACTION').textContent = 'WRITE ' + dec2hex(lock) + ' FINISHED';
+			} );
+		}); },
+		'getFuse': () => { _avr_spi.enable().then( () => {
+			for (key in {...CURRENT_DEVICE.efuse, ...CURRENT_DEVICE.hfuse, ...CURRENT_DEVICE.lfuse}) {
+				_('#NVME_'+key+'_R').textContent = 'Reading...';
+				_('#NVME_'+key+'_R').style.color = 'orange';
+			}
+			recurve([
+				[_avr_spi.readFuseE, [], x => { x = x[3];
+					for (key in CURRENT_DEVICE.efuse) {
+						x = x << CURRENT_DEVICE.efuse[key][0];
+						var value = (x & 0xFF00) >> 8;
+						_('#NVME_'+key+'_R').textContent = value;
+						_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.efuse[key][1] ? 'green' : 'red';
+						x = x & 0xFF;
+					}
+				}],
+				[_avr_spi.readFuseH, [], x => { x = x[3];
+					for (key in CURRENT_DEVICE.hfuse) {
+						x = x << CURRENT_DEVICE.hfuse[key][0];
+						var value = (x & 0xFF00) >> 8;
+						_('#NVME_'+key+'_R').textContent = value;
+						_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.hfuse[key][1] ? 'green' : 'red';
+						x = x & 0xFF;
+					}
+				}],
+				[_avr_spi.readFuseL, [], x => { x = x[3];
+					for (key in CURRENT_DEVICE.lfuse) {
+						x = x << CURRENT_DEVICE.lfuse[key][0];
+						var value = (x & 0xFF00) >> 8;
+						_('#NVME_'+key+'_R').textContent = value;
+						_('#NVME_'+key+'_R').style.color = value == CURRENT_DEVICE.lfuse[key][1] ? 'green' : 'red';
+						x = x & 0xFF;
+					}
+				}]
+			], null, null);dec2hex
+		}); },
+		'writeFuse': () => { _avr_spi.enable().then( () => {
+			var efuse = 0, hfuse = 0, lfuse = 0;
+			for (key in CURRENT_DEVICE.efuse) {
+				if (_('#NVME_'+key+'_W').value == '-') {
+					_('#NVME_FUSE_WRITEACTION').textContent = 'SELECT ' + key + ' FIRST';
+					return;
+				}
+				efuse = (efuse << CURRENT_DEVICE.efuse[key][0]) | _('#NVME_'+key+'_W').value;
+			}
+			for (key in CURRENT_DEVICE.hfuse) {
+				if (_('#NVME_'+key+'_W').value == '-') {
+					_('#NVME_FUSE_WRITEACTION').textContent = 'SELECT ' + key + ' FIRST';
+					return;
+				}
+				hfuse = (hfuse << CURRENT_DEVICE.hfuse[key][0]) | _('#NVME_'+key+'_W').value;
+			}
+			for (key in CURRENT_DEVICE.lfuse) {
+				if (_('#NVME_'+key+'_W').value == '-') {
+					_('#NVME_FUSE_WRITEACTION').textContent = 'SELECT ' + key + ' FIRST';
+					return;
+				}
+				lfuse = (lfuse << CURRENT_DEVICE.lfuse[key][0]) | _('#NVME_'+key+'_W').value;
+			}
+			_('#NVME_FUSE_WRITEACTION').textContent = 'WRITE ' + dec2hex(efuse) + ' ' + dec2hex(hfuse) + ' ' + dec2hex(lfuse) + ' IN PROGRESS';
+			recurve([
+				[_avr_spi.writeFuseE, [efuse], null],
+				[_avr_spi.writeFuseH, [hfuse], null],
+				[_avr_spi.writeFuseL, [lfuse], null]
+			], null, () => {
+				_('#NVME_FUSE_WRITEACTION').textContent = 'WRITE ' + dec2hex(efuse) + ' ' + dec2hex(hfuse) + ' ' + dec2hex(lfuse) + ' FINISHED';
+			});
 		}); }
 	};
+
+	/** AVR SPI Programming interface. DO NOT MODIFY */
 	const _avr_spi = {
-		"enable":	() => { return xhr_put(0xAC530000); },
-		"earse":	() => { return xhr_put(0xAC800000); },
-		"ready":	() => { return xhr_put(0xF00000FF); },
-		"readCodeH":	(a) => { return xhr_put(0x280000FF | a << 8); },
-		"readCodeL":	(a) => { return xhr_put(0x200000FF | a << 8); },
-		"readEep":	(a) => { return xhr_put(0xA00000FF | a << 8); },
-		"readLock":	() => { return xhr_put(0x580000FF); },
-		"readSig":	(a) => { return xhr_put(0x300000FF | a << 8); },
-		"readFuseL":	() => { return xhr_put(0x500000FF); },
-		"readFuseH":	() => { return xhr_put(0x580800FF); },
-		"readFuseE":	() => { return xhr_put(0x500800FF); },
-		"readCal":	() => { return xhr_put(0x380000FF); }
+		'enable':	() => { return xhr_put(0xAC530000); },
+		'earse':	() => { return xhr_put(0xAC800000); },
+		'ready':	() => { return xhr_put(0xF00000FF); },
+		'readCodeH':	(a) => { return xhr_put(0x280000FF | a << 8); },
+		'readCodeL':	(a) => { return xhr_put(0x200000FF | a << 8); },
+		'readEep':	(a) => { return xhr_put(0xA00000FF | a << 8); },
+		'readLock':	() => { return xhr_put(0x580000FF); },
+		'readSig':	(a) => { return xhr_put(0x30000000 | a << 8); },
+		'readFuseL':	() => { return xhr_put(0x500000FF); },
+		'readFuseH':	() => { return xhr_put(0x580800FF); },
+		'readFuseE':	() => { return xhr_put(0x500800FF); },
+		'readCal':	() => { return xhr_put(0x380000FF); },
+		'writeProgPg':	(a) => { return xhr_put(0x4C000000 | a << 8); },
+		'writeEEp':	(a, d) => { return xhr_put(0xC0000000 | a << 8 | d) },
+		'writeEEpPg':	(a) => { return xhr_put(0xC2000000 | a << 10) },
+		'writeLock':	(d) => { return xhr_put(0xACE00000 | d) },
+		'writeFuseL':	(d) => { return xhr_put(0xACA00000 | d) },
+		'writeFuseH':	(d) => { return xhr_put(0xACA80000 | d) },
+		'writeFuseE':	(d) => { return xhr_put(0xACA40000 | d) }
 	};
 
+	/** HTML util. Free-to-modify */
 	const _ = (s) => { return document.querySelector(s); };
 	const __ = (s) => { return document.querySelectorAll(s); };
 	const dec2hex = (n) => { return ('0'+(Number(n).toString(16))).slice(-2).toUpperCase(); };
@@ -162,7 +226,7 @@
 	const xhr_put = (a) => { return new Promise( (resolve) => {
 		xhr('PUT', '/'+a).then(([s, r]) => {
 			if (s != 200) {
-				_('#console').textContent = 'Error, server returns code ' + s + ': ' + r
+				console.log('Error, server returns code ' + s + ': ' + r);
 			} else {
 				var res = Number(r);
 				res = [res >> 24, (res >> 16) & 0xFF, (res >> 8) & 0xFF, res & 0xFF];
@@ -173,21 +237,6 @@
 			}
 		});
 	} ); };
-
-	const recurve = (quene, frecv, flast) => {
-		if (quene.length) {
-			var q = quene.shift();
-			q[0].apply(null, q[1]).then( (x) => {
-				if (typeof q[2] == 'function') q[2](x);
-				if (typeof frecv == 'function') frecv(x);
-				recurve(quene, frecv, flast);
-			} );
-		} else {
-			if (typeof flast == 'function') flast();
-		}
-		
-
-	};
 
 	const removeAllChild = (node) => { while(node.lastChild) node.lastChild.remove(); };
 	const createElement = (tag,content) => { var x = document.createElement(tag); x.textContent = content ?? ''; return x; };
@@ -208,27 +257,19 @@
 		return x;
 	};
 
-	window.addEventListener('load', (x) => {
-		_('#docViewer_sizeCtrl').dispatchEvent(new Event('input'));
-	});
-</script><style>
-	html, body { width: 100%; height: 100%; margin: 0; border: 0; padding: 0; }
-	
-	.sidebyside { display: flex; justify-content: space-between; }
+	/** JS helper. Free-to-modify */
+	const recurve = (quene, frecv, flast) => {
+		if (quene.length) {
+			var q = quene.shift();
+			q[0].apply(null, q[1]).then( (x) => {
+				if (typeof q[2] == 'function') q[2](x);
+				if (typeof frecv == 'function') frecv(x);
+				recurve(quene, frecv, flast);
+			} );
+		} else {
+			if (typeof flast == 'function') flast();
+		}
+		
 
-	
-	table { width: 100%; }
-	tr > * {
-		padding: 4px 12px;
-		max-width: 0;
-		border: solid black 1px;
-	}
-	table input, table select {
-		width: 100%;
-	}
-	table button {
-		width: 100%;
-		text-align: center;
-	}
-	#readEFUSE:hover, #readHFUSE:hover, #readLFUSE:hover {cursor: pointer;}
-</style></html>
+	};
+</script></html>

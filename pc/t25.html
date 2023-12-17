@@ -1,8 +1,8 @@
-<button onclick="_('#docViewer_content').src='https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2588-8-bit-AVR-Microcontrollers-tinyAVR-ATtiny261-ATtiny461-ATtiny861_Datasheet.pdf'">Open doc in left panel</button>
-<button onclick="window.open('https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2588-8-bit-AVR-Microcontrollers-tinyAVR-ATtiny261-ATtiny461-ATtiny861_Datasheet.pdf','_blank').focus();">Oepn doc in new tab</button>
+<button onclick="_('#docViewer_content').src='https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf'">Open doc in left panel</button>
+<button onclick="window.open('https://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-2586-AVR-8-bit-Microcontroller-ATtiny25-ATtiny45-ATtiny85_Datasheet.pdf','_blank').focus();">Oepn doc in new tab</button>
 
 <table>
-	<tr><th colspan="9">ATtiny261/461/861 NVME</th></tr>
+	<tr><th colspan="9">ATtiny25/45/85 NVME</th></tr>
 	<tr><th>Name</th><td>7</td><td>6</td><td>5</td><td>4</td><td>3</td><td>2</td><td>1</td><td>0</td></tr>
 	<tr id="NVME_LOCK"><th>LOCK</th>
 		<td colspan="6" id="NVME_LB_PLACEHOLDER">LB_PLACEHOLDER</td>
@@ -109,15 +109,16 @@
 		<option value="0">0 = External clock</option>
 		<option value="1">1 = High-Frequency PLL</option>
 		<option value="2">2 = 8MHz internal RC</option>
-		<option value="3">3 = 128kHz internal</option>
-		<option value="4">4 = 32kHz external watch crystal</option>
+		<option value="3">3 = 6.4MHz internal RC</option>
+		<option value="4">4 = 128kHz internal</option>
+		<option value="6">6 = 32kHz external watch crystal</option>
 		<option value="8">8 = 0.4-0.9 MHz external crystal, fast start-up</option>
 		<option value="9">9 = 0.4-0.9 MHz external crystal, slow start-up</option>
 		<option value="10">10 = 0.9-3.0 MHz external crystal, fast start-up</option>
 		<option value="11">11 = 0.9-3.0 MHz external crystal, slow start-up</option>
 		<option value="12">12 = 3-8 MHz external crystal, fast start-up</option>
 		<option value="13">13 = 3-8 MHz external crystal, slow start-up</option>
-		<option value="14">12 = 3-20 MHz external crystal, fast start-up</option>
-		<option value="15">13 = 3-20 MHz external crystal, slow start-up</option>
+		<option value="14">12 = 8+ MHz external crystal, fast start-up</option>
+		<option value="15">13 = 8+ MHz external crystal, slow start-up</option>
 	</select></td></tr>
 </table>
