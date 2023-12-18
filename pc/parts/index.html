@@ -10,12 +10,22 @@
 	<button onclick="avr_spi.earse()">SPI Earse</button>
 	<button onclick="_avr_spi.ready().then((x)=>{this.style.color=x[3]==1?'green':'red';})">SPI Ready?</button>
 	<div class="sidebyside" style="height:calc(100% - 2em);">
-		<div id="docViewer" style="width:50%;">
+		<div id="docViewer" style="width:50%;height:100%;">
 			<input id="docViewer_url" style="display:block; width:100%; height:1em; margin-bottom:1px; border:none; border-radius:0; border-bottom:solid #888 2px;" placeholder="Enter URL and hit ENTER" onkeyup="if(event.keyCode==13)_('#docViewer_content').src=this.value;" />
 			<iframe id="docViewer_content" style="display:block; width:100%; height:calc(100% - 2em);" src="about:blank"></iframe>
 		</div>
-		<div id="ispPanel" style="width:50%">
-			<div id="main"></div>
+		<div id="ispPanel" style="width:50%;height:100%;overflow:scroll;">
+			<div id="nvme"></div>
+			<div id="eeprom">
+				<p><b>EEPROM</b></p>
+				<textarea id="eeprom_content" style="min-width:48em;max-width:48em"></textarea>
+				<button id="EEPROM_READACTION">READ EEPROM</button>
+				<button id="EEPROM_WRITEACTION">WRITE EEPROM</button>
+			</div>
+			<div id="program">
+				<p><b>Program</b></p>
+
+			</div>
 		</div>
 	</div>
 	
@@ -49,37 +59,38 @@
 	var CURRENT_DEVICE = null;
 	const avr_spi = {
 		'getModel': () => { _avr_spi.enable().then( () => {
-			removeAllChild(_('#main'));
-			var sig = '';
+			removeAllChild(_('#nvme'));
+			var sig = '', cal = '';
 			recurve([
-				[_avr_spi.readSig, [0], null],
-				[_avr_spi.readSig, [1], null],
-				[_avr_spi.readSig, [2], null]
-			], (x) => {
-				sig += dec2hex(x[3]);
-			}, () => {
+				[_avr_spi.readSig, [0], (x) => {sig += dec2hex(x[3]);}],
+				[_avr_spi.readSig, [1], (x) => {sig += dec2hex(x[3]);}],
+				[_avr_spi.readSig, [2], (x) => {sig += dec2hex(x[3]);}],
+				[_avr_spi.readCal, [], (x) => {cal = dec2hex(x[3]);}]
+			], null, () => {
 				if (sig in avr_sig) {
 					xhr('GET', '/'+avr_sig[sig][1]+'.json').then(([s, r]) => {
 						if (s != 200) {
 							var err = 'Error, server returns code ' + s + ': ' + r;
-							_('#main').textContent = err;
+							_('#nvme').textContent = err;
 							console.log(err);
 						} else {
 							CURRENT_DEVICE = JSON.parse(r);
 							xhr('GET', '/'+avr_sig[sig][1]+'.html').then(([s, r]) => {
 								if (s != 200) {
 									var err = 'Error, server returns code ' + s + ': ' + r;
-									_('#main').textContent = err;
+									_('#nvme').textContent = err;
 									console.log(err);
 								} else {
-									_('#main').innerHTML = '<span style="padding:0 20px;">Model: '+avr_sig[sig][0]+' Family: '+avr_sig[sig][1]+'</span>' + r;
+									_('#nvme').innerHTML = '<span style="padding:0 20px;">Model: '+avr_sig[sig][0]+' Family: '+avr_sig[sig][1]+' cal='+cal+'</span>' + r;
+									_('#EEPROM_READACTION').onclick = () => {avr_spi.readEep(0,avr_sig[sig][3])};
+									_('#EEPROM_WRITEACTION').onclick = () => {avr_spi.writeEep(0,avr_sig[sig][3])};
 								}
 							});
 						}
 					});
 				} else {
 					var err = 'Model unknown ' + sig;
-					_('#main').textContent = err;
+					_('#nvme').textContent = err;
 					console.log(err);
 				}
 			});
@@ -185,6 +196,32 @@
 			], null, () => {
 				_('#NVME_FUSE_WRITEACTION').textContent = 'WRITE ' + dec2hex(efuse) + ' ' + dec2hex(hfuse) + ' ' + dec2hex(lfuse) + ' FINISHED';
 			});
+		}); },
+		'readEep': (addr, len) => { _avr_spi.enable().then( () => {
+			var cmd = [];
+			var data = [];
+			_('#eeprom_content').value = '';
+			_('#EEPROM_READACTION').textContent = 'READING EEPROM';
+			for (var i = addr; i < len; i++) {
+				cmd.push([_avr_spi.readEep, [addr + i], null]);
+			}
+			recurve(cmd, (x) => {
+				_('#eeprom_content').value += dec2hex(x[3]) + ' ';
+				data.push(x[3]);
+			}, () => {
+				_('#EEPROM_READACTION').textContent = 'READ EEPROM FINISHED';
+			});
+		}); },
+		'writeEep': (addr, len) => { _avr_spi.enable().then( () => {
+			var cmd = [];
+			var data = _('#eeprom_content').value.trim().split(/[^0-9A-Fa-f]/);
+			_('#EEPROM_WRITEACTION').value = 'WRITING EEPROM';
+			for (var i = addr; i < data.length; i++) {
+				cmd.push([_avr_spi.writeEep, [addr + i, Number('0x'+data[i])], null]);
+			}
+			recurve(cmd, null, () => {
+				_('#EEPROM_WRITEACTION').value = 'WRITE EEPROM FINISHED';
+			});
 		}); }
 	};
 
@@ -192,23 +229,27 @@
 	const _avr_spi = {
 		'enable':	() => { return xhr_put(0xAC530000); },
 		'earse':	() => { return xhr_put(0xAC800000); },
-		'ready':	() => { return xhr_put(0xF00000FF); },
-		'readCodeH':	(a) => { return xhr_put(0x280000FF | a << 8); },
-		'readCodeL':	(a) => { return xhr_put(0x200000FF | a << 8); },
-		'readEep':	(a) => { return xhr_put(0xA00000FF | a << 8); },
-		'readLock':	() => { return xhr_put(0x580000FF); },
+		'ready':	() => { return xhr_put(0xF0000000); },
+		'loadCodeEAdd':	(a) => { return xhr_put(0x4D000000 | a << 8); },
+		'loadCodePgH':	(a, d) => { return xhr_put(0x48000000 | a << 8 | d); },
+		'loadCodePgL':	(a, d) => { return xhr_put(0x40000000 | a << 8 | d); },
+		'loadEepPg':	(a, d) => { return xhr_put(0xC1000000 | a << 8 | d); },
+		'readCodeH':	(a) => { return xhr_put(0x28000000 | a << 8); },
+		'readCodeL':	(a) => { return xhr_put(0x20000000 | a << 8); },
+		'readEep':	(a) => { return xhr_put(0xA0000000 | a << 8); },
+		'readLock':	() => { return xhr_put(0x58000000); },
 		'readSig':	(a) => { return xhr_put(0x30000000 | a << 8); },
-		'readFuseL':	() => { return xhr_put(0x500000FF); },
-		'readFuseH':	() => { return xhr_put(0x580800FF); },
-		'readFuseE':	() => { return xhr_put(0x500800FF); },
-		'readCal':	() => { return xhr_put(0x380000FF); },
+		'readFuseL':	() => { return xhr_put(0x50000000); },
+		'readFuseH':	() => { return xhr_put(0x58080000); },
+		'readFuseE':	() => { return xhr_put(0x50080000); },
+		'readCal':	() => { return xhr_put(0x38000000); },
 		'writeProgPg':	(a) => { return xhr_put(0x4C000000 | a << 8); },
-		'writeEEp':	(a, d) => { return xhr_put(0xC0000000 | a << 8 | d) },
-		'writeEEpPg':	(a) => { return xhr_put(0xC2000000 | a << 10) },
+		'writeEep':	(a, d) => { return xhr_put(0xC0000000 | a << 8 | d) },
+		'writeEepPg':	(a) => { return xhr_put(0xC2000000 | a << 10) },
 		'writeLock':	(d) => { return xhr_put(0xACE00000 | d) },
 		'writeFuseL':	(d) => { return xhr_put(0xACA00000 | d) },
 		'writeFuseH':	(d) => { return xhr_put(0xACA80000 | d) },
-		'writeFuseE':	(d) => { return xhr_put(0xACA40000 | d) }
+		'writeFuseE':	(d) => { return xhr_put(0xACA40000 | d) },
 	};
 
 	/** HTML util. Free-to-modify */

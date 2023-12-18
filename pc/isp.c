@@ -150,8 +150,10 @@ int main(int argc, char* argv[]) {
 				continue;
 			}
 
-			fprintf(stdout, "Request page: %s\n", filename);
-			int file = open(filename, O_RDONLY);
+			char filenameFullpath[16 + sizeof(filename)] = "./parts/";
+			strncat(filenameFullpath, filename, sizeof(filename));
+			fprintf(stdout, "Request page: %s\n", filenameFullpath);
+			int file = open(filenameFullpath, O_RDONLY);
 			if (file < 0) {
 				perror("Cannot open webpage file");
 				http_send(transaction, "404 Not Found", "", 0);
