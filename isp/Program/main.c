@@ -3,7 +3,7 @@
 #define PIN_CK 2
 #define PIN_UART 3
 #define PIN_LED 4
-#define UART_DELAY 104 // 1MHz / 9600BAUD = 104.16667 cycles
+#define UART_DELAY 69 // 8MHz / 115200BAUD = 69.44 cycles => Trim to 7.9488MHz
 
 #include <avr/io.h>
 
@@ -38,6 +38,8 @@ uint8_t spi(uint8_t data) {
 		TIFR = (1<<OCF0A);
 		USICR = (1<<USIWM0) | (1<<USICS1) | (1<<USICLK) | (1<<USITC);
 	} while (!( USISR & (1<<USIOIF) ));
+	
+	TCCR0B = (0<<CS00);
 	return USIDR;
 }
 

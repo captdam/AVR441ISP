@@ -10,7 +10,7 @@
 #include <termios.h>
 #include "http.h"
 
-#define ISP_BAUD B9600
+#define ISP_BAUD B115200
 
 /** Send a byte through tty. 
  * If success, return NULL and write the rx value into rx; if failed, return a pointer to the error message. 
