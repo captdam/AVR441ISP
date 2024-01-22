@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html><head>
+	<title>Tiny25 ISP</title>
+	<meta charset="utf-8" />
+	<script>
+		var avr_sig = {'000102': ['LOCKED', 'LOCKED', 16, 16, 16, 1, 16, 1, 5, 4]}; //Sig: Model number, fuse set, flash words, eeprom words, flash page size, flash pages, eeprom page size, eeprom page, flash earse ms, eeprom earse ms
+		var avr_nvme = {};
+	</script>
+	<script src="parts/t25.js"></script>
+	<script src="parts/t261.js"></script>
+	<script src="parts/m48.js"></script>
+</head><body><div>
+	<input id="docViewer_sizeCtrl" type="range" min="0" max="70" value="50" style="width:70%" oninput="_('#docViewer').style.width=this.value+'%'; _('#ispPanel').style.width=(98-this.value)+'%';"; /></input>
+</div><div class="sidebyside" style="height:calc(100% - 2em);"><div id="docViewer" style="width:50%;height:100%;">
+	<input id="docViewer_url" style="display:block; width:100%; height:1em; margin-bottom:1px; border:none; border-radius:0; border-bottom:solid #888 2px;" placeholder="Enter URL and hit ENTER" onkeyup="if(event.keyCode==13)_('#docViewer_content').src=this.value;" />
+	<iframe id="docViewer_content" style="display:block; width:100%; height:calc(100% - 2em);" src="about:blank"></iframe>
+</div><div id="ispPanel" style="width:50%;height:100%;overflow:scroll;border:solid #888 1px;"><div id="cmd">
+	<b>CMD</b>
+	<span id="uart_info" style="overflow:hidden">Init</span><br />
+	<button id="uart_actionSelect">Select UART</button>
+	<button onclick="get_spi()">SPI Get</button>
+	<button onclick="earse_spi()">SPI Earse</button>
+</div><div id="nvme">
+	<b>NVME</b>
+	<table id="nvme_layout"></table>
+	<table id="nvme_workspace"></table>
+	<span id="nvme_info" style="overflow:hidden">Init</span><br />
+</div><div class="sidebyside"><div id="eeprom" style="border:solid #888 1px;">
+	<b>EEPROM</b><div>
+		<button id="eeprom_actionRead">Read</button>
+		<button id="eeprom_actionWrite">Write</button>
+		<button id="eeprom_synchFileSelector">Select local file</button>
+		<button id="eeprom_actionLoad">Reload</button>
+		<input type="checkbox" id="eeprom_synchCheckbox">Synch
+		<button id="eeprom_actionSave" data-filename="eeprom.bin">Save</button>
+	</div><div style="width:max-content;font-family: 'Courier New', Courier, monospace;"><div>
+		<textarea cols="72" rows="1" id="eeprom_info" disabled></textarea><br />
+		<textarea cols="8" rows="1" id="eeprom_header" disabled>Addr</textarea>
+		<textarea cols="64" rows="1" disabled style="background-image:url(grid.png)">000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F</textarea><br />
+		<textarea cols="8" rows="1" id="eeprom_addr" disabled></textarea>
+		<textarea cols="64" rows="1" id="eeprom_content" style="background-image:url(grid.png)"></textarea>
+	</div></div>
+</div><div id="program" style="border:solid #888 1px;">
+	<b>Flash</b><div>
+		<button id="flash_actionRead">Read</button>
+		<button id="flash_actionWrite">Write</button>
+		<button id="flash_synchFileSelector">Select local file</button>
+		<button id="flash_actionLoad">Reload</button>
+		<input type="checkbox" id="flash_synchCheckbox">Synch
+		<button id="flash_actionSave" data-filename="flash.bin">Save</button>
+	</div><div style="width:max-content;font-family: 'Courier New', Courier, monospace;"><div>
+		<textarea cols="72" rows="1" id="flash_info" disabled></textarea><br />
+		<textarea cols="8" rows="1" id="flash_header" disabled>Addr</textarea>
+		<textarea cols="64" rows="1" disabled style="background-image:url(grid.png)">0000000100020003000400050006000700080009000A000B000C000D000E000F</textarea><br />
+		<textarea cols="8" rows="1" id="flash_addr" disabled></textarea>
+		<textarea cols="64" rows="1" id="flash_content" style="background-image:url(grid.png)"></textarea>
+	</div></div>
+</div></div></div></div></body><style>
+	html, body { width: 100%; height: 100%; margin: 0; border: 0; padding: 0; }
+	
+	.sidebyside { display: flex; justify-content: space-between; }
+	
+	table { width: 100%; border-collapse: collapse; }
+	tr > * { padding: 2px; max-width: 0; border: solid black 1px; }
+	table input, table select { width: 100%; }
+	table button { width: 100%; text-align: center; }
+	table caption { caption-side: bottom; text-align: left; }
+	#readEFUSE:hover, #readHFUSE:hover, #readLFUSE:hover {cursor: pointer;}
+
+	textarea { overflow: hidden; resize: none; background-size: 12.5% 100%; image-rendering: pixelated; }
+</style><script>
+	const _ = (s) => { return document.querySelector(s); };
+	const __ = (s) => { return document.querySelectorAll(s); };
+	const dec2hex = (n) => {
+		if (n instanceof Array) {
+			var d = [];
+			n.map((x) => d.push(dec2hex(x)) );
+			return d;
+		}
+		return ('0'+(Number(n).toString(16))).slice(-2).toUpperCase();
+	};
+	const getTimeStr = () => { const timestamp = new Date(); return ('0'+timestamp.getHours()).substr(-2) +':'+ ('0'+timestamp.getMinutes()).substr(-2) +':'+ ('0'+timestamp.getSeconds()).substr(-2); };
+	const removeAllChild = (node) => { while(node.lastChild) node.lastChild.remove(); };
+	const createElement = (tag,content) => { var x = document.createElement(tag); x.textContent = content ?? ''; return x; };
+	const domStructure = (struct) => {
+		var x = createElement(struct.tag, null);
+		for (const key in struct) {
+			if (key == 'tag')
+				continue;
+			else if (key == 'child')
+				struct.child.map( y => x.appendChild(domStructure(y)) );
+			else if (key == 'class')
+				x.classList = struct[key];
+			else {
+				x[key] = struct[key];
+				x.setAttribute(key, struct[key]);
+			}
+		}
+		return x;
+	};
+</script><script>
+
+	/** Front-end JS. Free-to-modify */
+	window.addEventListener('load', (x) => {
+		_('#docViewer_sizeCtrl').dispatchEvent(new Event('input'));
+	});
+
+	/** Get SPI AVR device signature to prepare workspace. 
+	 */
+	const get_spi = async () => {
+		nvme.reset();
+		flashFile.clear();
+		eepromFile.clear();
+
+		const info = await avr_spi.getModel();
+		if (!(info.sig in avr_sig)) {
+			nvme.__printInfo('Unknown signature: ' + info.sig, 'red');
+			return;
+		}
+		
+		nvme.reset(avr_nvme[avr_sig[info.sig][1]]);
+		nvme.__printInfo('Signature: ' + info.sig + ' Model: ' + avr_sig[info.sig][0] + ' NVME: ' + avr_sig[info.sig][1] + ' Cal=' + info.cal);
+		flashFile.setSize(avr_sig[info.sig][2], 2);
+		eepromFile.setSize(avr_sig[info.sig][3], 1);
+	};
+
+	/** Earse SPI AVR device to remove lock bits. 
+	 */
+	const earse_spi = async () => {
+		await avr_spi.earse();
+	}
+
+	/** High-level SPI functions. 
+	 */
+	const avr_spi = {
+		'getModel': async () => { await _avr_spi.enable();
+			return {
+				'sig': dec2hex(await _avr_spi.readSig(0)) + dec2hex(await _avr_spi.readSig(1)) + dec2hex(await _avr_spi.readSig(2)),
+				'cal': dec2hex(await _avr_spi.readCal(0))
+			};
+		},
+		'earse': async () => { await _avr_spi.enable();
+			await _avr_spi.earse();
+		},
+		'readLock': async () => { await _avr_spi.enable();
+			return await _avr_spi.readLock();
+		},
+		'writeLock': async (lock) => { await _avr_spi.enable();
+			await _avr_spi.writeLock(lock);
+		},
+		'readFuse': async () => { await _avr_spi.enable();
+			return [await _avr_spi.readFuseE(), await _avr_spi.readFuseH(), await _avr_spi.readFuseL()];
+		},
+		'writeFuse': async (efuse, hfuse, lfuse) => { await _avr_spi.enable();
+			await _avr_spi.writeFuseE(efuse);
+			await _avr_spi.writeFuseH(hfuse);
+			await _avr_spi.writeFuseL(lfuse);
+		},
+		'readEep': async (addr, len, step) => { await _avr_spi.enable();
+			var d = [];
+			for (var i = 0; i < len; i++) {
+				const val = await _avr_spi.readEep(addr + i);
+				step(addr + i, val);
+				d.push(val);
+			}
+			return d;
+		},
+		'writeEep': async (addr, data, step) => { await _avr_spi.enable();
+			for (var i = 0; i < data.length; i++) {
+				await _avr_spi.writeEep(addr + i, data[i]);
+				step(i);
+				await new Promise((resolve) => {setTimeout(() => { resolve(); }, 5); })
+			}
+		},
+		'readCode': async (addr, len, step) => { await _avr_spi.enable();
+			var d = [];
+			for (var a = addr; a < addr + len; a++) {
+				const high = await _avr_spi.readCodeH(a);
+				const low = await _avr_spi.readCodeL(a);
+				const val = high << 8 | low;
+				step(a, high);
+				step(a, low);
+				d.push(val);
+			}
+			return d;
+		},
+	};
+
+	/** AVR SPI Programming interface. DO NOT MODIFY */
+	const _avr_spi = {
+		'enable':	async () => { return await uart.exchange([0xAC, 0x53, 0x00, 0x00]); },
+		'earse':	async () => { return await uart.exchange([0xAC, 0x80, 0x00, 0x00]); },
+		'ready':	() => { return xhr_put(0xF0000000); },
+		'loadCodeEAdd':	(a) => { return xhr_put(0x4D000000 | a << 8); },
+		'loadCodePgH':	(a, d) => { return xhr_put(0x48000000 | a << 8 | d); },
+		'loadCodePgL':	(a, d) => { return xhr_put(0x40000000 | a << 8 | d); },
+		'loadEepPg':	(a, d) => { return xhr_put(0xC1000000 | a << 8 | d); },
+		'readCodeH':	async (a) => { return await uart.exchange([0x28, a >> 8, a, 0x00]); },
+		'readCodeL':	async (a) => { return await uart.exchange([0x20, a >> 8, a, 0x00]); },
+		'readEep':	async (a) => { return await uart.exchange([0xA0, a >> 8, a, 0x00]); },
+		'readLock':	async () => { return await uart.exchange([0x58, 0x00, 0x00, 0x00]); },
+		'readSig':	async (a) => { return await uart.exchange([0x30, a >> 8, a, 0x00]); },
+		'readFuseL':	async () => { return await uart.exchange([0x50, 0x00, 0x00, 0x00]); },
+		'readFuseH':	async () => { return await uart.exchange([0x58, 0x08, 0x00, 0x00]); },
+		'readFuseE':	async () => { return await uart.exchange([0x50, 0x08, 0x00, 0x00]); },
+		'readCal':	async () => { return await uart.exchange([0x38, 0x00, 0x00, 0x00]); },
+		'writeCodePg':	(a) => { return xhr_put(0x4C000000 | a << 8); },
+		'writeEep':	async (a, d) => { return await uart.exchange([0xC0, a >> 8, a, d]); },
+		'writeEepPg':	(a) => { return xhr_put(0xC2000000 | a << 10) },
+		'writeLock':	async (d) => { return await uart.exchange([0xAC, 0xE0, 0x00, d]); },
+		'writeFuseL':	async (d) => { return await uart.exchange([0xAC, 0xA0, 0x00, d]); },
+		'writeFuseH':	async (d) => { return await uart.exchange([0xAC, 0xA8, 0x00, d]); },
+		'writeFuseE':	async (d) => { return await uart.exchange([0xAC, 0xA4, 0x00, d]); },
+	};
+
+
+	class Infoable {
+		dom_info;
+
+		/** Specify the info DOM. 
+		 * @param {DOM} dom HTML DOM for the info
+		 */
+		constructor(dom) {
+			this.dom_info = dom;
+		}
+
+		/** Print info in info DOM
+		 * @param {String} text Text to print
+		 * @param {String} color If provided, change the text color, default is 'black'
+		 */
+		__printInfo(text, color='black') {
+			this.dom_info.textContent = getTimeStr() + ' - ' + text;
+			if (color) this.dom_info.style.color = color;
+		}
+	}
+
+
+
+	/** Serail port */
+	class UART extends Infoable{
+		tty = null;
+		baud = 0;
+		dom = {
+			'actionSelect': null,			//Button: Select UART device
+			'info': null				//Text: CMD display
+		};
+
+		/** Create a UART interface. 
+		 * @param {JSON} dom HTML DOM list
+		 * @param {Number} baud BAUD rate
+		 */
+		constructor(dom, baud) {
+			super(dom.info);
+			this.dom = dom;
+			this.baud = baud;
+			navigator.serial.addEventListener("connect", () => { this.__printInfo('New serial device connected'); });
+			navigator.serial.addEventListener("disconnect", async (e) => {
+				if (e.target == this.tty) {
+					try{ await tty.close(); await tty.forget(); }catch(e){}
+					this.tty = null;
+					this.__printInfo('TTY lost', 'red');
+					dom.actionSelect.textContent = 'UART lost';
+					dom.actionSelect.style.color = 'red';
+				}
+			});
+			dom.actionSelect.onclick = () => {
+				navigator.serial.requestPort().then(async (port) => {
+					if (this.tty) { try{ await this.tty.close(); await this.tty.forget(); }catch(e){} }
+					this.tty = port;
+					await this.tty.open({baudRate:baud, bufferSize:256, dataBits:8, flowControl:'none', parity:'none', stopBits:1});
+					this.__printInfo('Connect to tty: baud '+baud+'-8N1', 'green');
+					dom.actionSelect.textContent = 'UART OK';
+					dom.actionSelect.style.color = 'green';
+				}).catch((e) => { this.__printInfo('Cannot access UART: '+e, 'red'); });
+			}
+		}
+
+		/** Receive data from UART port. 
+		 * @param {Number} len Required data length
+		 * @param {number} timeout Receiver inter-character timeout, defaul is 10 (0.01s); Use 0 to clear the buffer
+		 * @return {Array} Data from UART port
+		 */
+		async recv(len, timeout=10) {
+			const reader = await this.tty.readable.getReader();
+			var data = [];
+			try {
+				while (data.length < len) {
+					var res = await Promise.race([
+						reader.read(),
+						new Promise((resolve, reject) => {setTimeout(() => {
+							//resolve({'value':[undefined]});
+							reject(new Error('UART read Timeout ('+data.length+'/'+len+')'));
+						}, timeout); })
+					]);
+					data.push(...(res.value));
+				}
+			} catch (e) {
+				if (timeout) {
+					this.__printInfo('Recv ' + data.length + ' error: ' + e, 'red');
+					console.warn(e);
+				}
+				await reader.cancel();
+			} finally {
+				await reader.releaseLock();
+			}
+			return data;
+		}
+		/** Send data to UART port. 
+		 * For half-duplex system where Tx and Rx use the same line, UART will receive echo when sending, set echo to true to remove them. 
+		 * @param {Number[]} data Data to send
+		 * @param {Number} echo Remove echo? Give timeout for echo receive or -1 if no echo, default -1 (do not remove echo)
+		 */
+		async send(data, echo=-1) {
+			const buf = new Uint8Array(data);
+			const writer = this.tty.writable.getWriter();
+			await writer.write(buf);
+			writer.releaseLock();
+			if (echo != -1) { await this.recv(data.length, echo); }
+		}
+		/** Byte-wise exchange data on UART port, for raw-SPI mode ONLY! 
+		 * Send a byte, wait a byte. Repeat this for the byte array 'token'. 
+		 * For SPI ISP, the 2nd and 3rd byte from target will be echo of 1st and 2nd byte sent to target. 
+		 * @param {Number[]} token 
+		 * @param {number} timeout Receiver inter-character timeout, defaul is 10 (0.01s)
+		 * @return {Number} Response from target, last byte
+		 * @throws {Error} ISP echo mismatched
+		 */
+		async exchange(token, timeout=10) {
+			if (token.length != 4) {
+				throw new TypeError('Token must be 4-byte long');
+			}
+			try { await this.recv(128, 0);} catch (e) {}
+			var buf;
+			for (var retry = 0, error = '';; retry++) {
+				buf = [null, null, null, null];
+				if (retry > 5) {
+					console.error(error);
+					throw new Error(error);
+				}
+				console.log(getTimeStr() + ' Send: ', dec2hex(token));
+				for (var i = 0; i < token.length; i++) {
+					await this.send([token[i]], timeout);
+					buf[i] = (await this.recv(1, timeout))[0];
+					await new Promise((res) => { setTimeout(res, Math.ceil(2500/this.baud)); }); // 2.5 bit time of inter-character wait, software UART on ISP
+				}
+				console.log(getTimeStr() + ' Recv: ', dec2hex(buf));
+				if (buf[1] != token[0] || buf[2] != token[1]) {
+					var error = 'ISP echo mismatched Send[0,1] = ['+token[0]+','+token[1]+'] Echo[1,2] = ['+buf[1]+','+buf[2]+']';
+					this.__printInfo(error, 'red');
+					console.warn('RETRY ' + error);
+					continue;
+				}
+				if (typeof buf[3] != 'number') {
+					var error = 'Return value is bad';
+					this.__printInfo(error, 'red');
+					console.warn('RETRY ' + error, buf[3]);
+					continue;
+				}
+				this.__printInfo('ISP returns '+dec2hex(buf));
+				break;
+			}
+			return buf[3];
+		}
+	}
+	var uart = new UART({
+		'actionSelect':		_('#uart_actionSelect'),
+		'info':			_('#uart_info')
+	}, 115200);
+
+	class NVME_SPI extends Infoable {
+		dom = {
+			'table_layout': null,			// Bit-field layout
+			'table_workspace': null			// Workspace
+		}
+		dev;
+
+		/** Create a SPI-support device NVME workspace. 
+		 * @param {JSON} dom HTML DOM list
+		 * @param {String} idPrefix Generated DOM ID prefix 
+		 */
+		 constructor(dom, idPrefix) {
+			super(dom.info)
+			this.dom = dom;
+			this.idPrefix = idPrefix
+		}
+
+		/** Reset workspace for a given model. 
+		 * @param {JSON} dev A child from avr_nvme.* If not p[rovided, only truncate the table
+		 */
+		reset(dev=null) {
+			removeAllChild(this.dom.table_layout);
+			removeAllChild(this.dom.table_workspace);
+			if (!dev)
+				return;
+			this.dev = dev;
+			this.__reset_layout();
+			this.__reset_workspace();
+			this.__printInfo('Layout created for ')
+		}
+		__reset_layout() {
+			for (const element in {'lock':this.dev.lock, 'efuse':this.dev.efuse, 'hfuse':this.dev.hfuse, 'lfuse':this.dev.lfuse}) {
+				if (!['lock', 'efuse', 'hfuse', 'lfuse'].includes(element)) continue;
+				const row = this.dom.table_layout.insertRow();
+				row.appendChild(createElement('th', element));
+				for (const field in this.dev[element]) {
+					const col = row.insertCell();
+					col.textContent = field;
+					col.id = 'NVME_' + field;
+					col.colSpan = this.dev[element][field][0];
+				}
+			};
+		}
+		__reset_workspace() {
+			const layout = {...this.dev.lock, ...this.dev.efuse, ...this.dev.hfuse, ...this.dev.lfuse};
+			const create = (row, element) => {
+				const options = this.dev.desc[element];
+				row.onmouseenter = () => { _('#'+this.idPrefix+element).style.backgroundColor = 'yellow'; };
+				row.onmouseleave = () => { _('#'+this.idPrefix+element).style.backgroundColor = ''; };
+				const reader = row.insertCell();
+				reader.textContent = '-';
+				reader.id = this.idPrefix + element + '_R';
+				const copyer = row.insertCell();
+				copyer.textContent = element + '(['+layout[element][0]+']:'+layout[element][1]+')';
+				const writer = row.insertCell();
+				const select = createElement('select');
+				select.id = this.idPrefix + element + '_W';
+				if (Object.keys(options).length == 1) {
+					const option = createElement('option', Object.keys(options)[0] + ' - ' + Object.values(options)[0]);
+					option.value = Object.keys(options)[0];
+					select.appendChild(option);
+				} else {
+					const option = createElement('option', '-');
+					option.value = '-';
+					select.appendChild(option);
+					for (const opt in options) {
+						const option = createElement('option', opt + ' - ' + options[opt]);
+						option.value = opt;
+						select.appendChild(option);
+					}
+				}
+				writer.appendChild(select);
+			};
+
+			const rowLock = this.dom.table_workspace.insertRow();
+			const rowLock_read = rowLock.insertCell();
+			const rowLock_readBtn = createElement('button', 'Read lock');
+			rowLock_readBtn.onclick = async () => { await this.readLock(); };
+			rowLock_read.appendChild(rowLock_readBtn);
+			const rowLock_copy = rowLock.insertCell();
+			const rowLock_copyBtn = createElement('button', 'Copy lock');
+			rowLock_copyBtn.onclick = () => { this.copyLock(); };
+			rowLock_copy.appendChild(rowLock_copyBtn);
+			rowLock.appendChild(rowLock_copy);
+			const rowLock_write = rowLock.insertCell();
+			const rowLock_writeBtn = createElement('button', 'Write lock');
+			rowLock_writeBtn.onclick = async () => { await this.writeLock(); };
+			rowLock_write.appendChild(rowLock_writeBtn);
+			for (const element in this.dev.lock) {
+				create(this.dom.table_workspace.insertRow(), element);
+			}
+			const rowFuse = this.dom.table_workspace.insertRow();
+			const rowFuse_read = rowFuse.insertCell();
+			const rowFuse_readBtn = createElement('button', 'Read fuse');
+			rowFuse_readBtn.onclick = () => { this.readFuse(); };
+			rowFuse_read.appendChild(rowFuse_readBtn);
+			const rowFuse_copy = rowFuse.insertCell();
+			const rowFuse_copyBtn = createElement('button', 'Copy fuse');
+			rowFuse_copyBtn.onclick = () => { this.copyFuse(); };
+			rowFuse_copy.appendChild(rowFuse_copyBtn);
+			rowFuse.appendChild(rowFuse_copy);
+			const rowFuse_write = rowFuse.insertCell();
+			const rowFuse_writeBtn = createElement('button', 'Write fuse');
+			rowFuse_writeBtn.onclick = async () => { await this.writeFuse(); };
+			rowFuse_write.appendChild(rowFuse_writeBtn);
+			for (const element in {...this.dev.efuse, ...this.dev.hfuse, ...this.dev.lfuse}) {
+				create(this.dom.table_workspace.insertRow(), element);
+			}
+		}
+
+		/** Highlight read and write fields different from default value. 
+		 */
+		verify() {
+			const layout = {...this.dev.lock, ...this.dev.efuse, ...this.dev.hfuse, ...this.dev.lfuse};
+			for (const field in layout) {
+				_('#'+this.idPrefix+field+'_R').style.color = _('#'+this.idPrefix+field+'_R').textContent == layout[field][1] ? 'green' : 'red';
+				_('#'+this.idPrefix+field+'_W').style.color = _('#'+this.idPrefix+field+'_W').value == layout[field][1] ? 'green' : 'red';
+			}
+		}
+
+		/** Read lock bits from target device into workspace-read. 
+		 */
+		async readLock() {
+			for (const key in this.dev.lock) {
+				_('#'+this.idPrefix+key+'_R').textContent = 'Reading...';
+				_('#'+this.idPrefix+key+'_R').style.color = 'orange';
+			}
+			let val = await avr_spi.readLock();
+			this.__printInfo('Read lock: ' + dec2hex(val));
+			for (const key in this.dev.lock) {
+				val = val << this.dev.lock[key][0];
+				var x = (val & 0xFF00) >> 8;
+				_('#'+this.idPrefix+key+'_R').textContent = x;
+				_('#'+this.idPrefix+key+'_R').style.color = x == this.dev.lock[key][1] ? 'green' : 'red';
+				val = val & 0xFF;
+			}
+		}
+
+		/** Copy lock bits from workspace-read into workspace-write. 
+		 * Stop when encounter error. 
+		 */
+		copyLock() {
+			for (const field in this.dev.lock) {
+				if (_('#'+this.idPrefix+field+'_R').textContent == '-') {
+					this.__printInfo('Error: ' + field + 'has no value', 'red');
+					return;
+				}
+				_('#'+this.idPrefix+field+'_W').value = _('#'+this.idPrefix+field+'_R').textContent;
+			}
+			try { this.verify(); } catch (e) { this.__printInfo('Error: ' + e, 'red'); }
+		}
+
+		/** Read lock bits fron workspace-write to target device. 
+		 */
+		async writeLock() {
+			var lock = 0;
+			for (const field in this.dev.lock) {
+				if (_('#'+this.idPrefix+field+'_W').value == '-') {
+					this.__printInfo('Error: ' + field + ' has no value', 'red');
+					return;
+				}
+				lock = (lock << this.dev.lock[field][0]) | _('#'+this.idPrefix+field+'_W').value;
+			}
+			this.__printInfo('Writing lock: ' + dec2hex(lock));
+			await avr_spi.writeLock(lock);
+			this.__printInfo('Fuses ' + dec2hex(lock) + ' write finished');
+		}
+
+		/** Read fuses from target device into workspace-read. 
+		 */
+		async readFuse() {
+			for (const key in {...this.dev.efuse, ...this.dev.hfuse, ...this.dev.lfuse}) {
+				_('#'+this.idPrefix+key+'_R').textContent = 'Reading...';
+				_('#'+this.idPrefix+key+'_R').style.color = 'orange';
+			}
+			let [vale, valh, vall] = await avr_spi.readFuse();
+			this.__printInfo('Read fuses: ' + dec2hex([vale, valh, vall]));
+			if (vale instanceof Number) {
+				this.__printInfo('Efuse read error, get: ' + vale);
+				throw new Error('Efuse read error, get: ' + vale);
+			}
+			for (const key in this.dev.efuse) {
+				vale = vale << this.dev.efuse[key][0];
+				var x = (vale & 0xFF00) >> 8;
+				_('#'+this.idPrefix+key+'_R').textContent = x;
+				_('#'+this.idPrefix+key+'_R').style.color = x == this.dev.efuse[key][1] ? 'green' : 'red';
+				vale = vale & 0xFF;
+			}
+			if (valh instanceof Number) {
+				this.__printInfo('Hfuse read error, get: ' + valh);
+				throw new Error('Hfuse read error, get: ' + valh);
+			}
+			for (const key in this.dev.hfuse) {
+				valh = valh << this.dev.hfuse[key][0];
+				var x = (valh & 0xFF00) >> 8;
+				_('#'+this.idPrefix+key+'_R').textContent = x;
+				_('#'+this.idPrefix+key+'_R').style.color = x == this.dev.hfuse[key][1] ? 'green' : 'red';
+				valh = valh & 0xFF;
+			}
+			if (vall instanceof Number) {
+				this.__printInfo('lfuse read error, get: ' + vall);
+				throw new Error('Lfuse read error, get: ' + vall);
+			}
+			for (const key in this.dev.lfuse) {
+				vall = vall << this.dev.lfuse[key][0];
+				var x = (vall & 0xFF00) >> 8;
+				_('#'+this.idPrefix+key+'_R').textContent = x;
+				_('#'+this.idPrefix+key+'_R').style.color = x == this.dev.lfuse[key][1] ? 'green' : 'red';
+				vall = vall & 0xFF;
+			}
+		}
+
+		/** Copy fuses from workspace-read into workspace-write. 
+		 * Stop when encounter error. 
+		 */
+		copyFuse() {
+			for (const field in {...this.dev.efuse, ...this.dev.hfuse, ...this.dev.lfuse}) {
+				if (_('#'+this.idPrefix+field+'_R').textContent == '-') {
+					this.__printInfo('Error: ' + field + ' has no value', 'red');
+					return;
+				}
+				_('#'+this.idPrefix+field+'_W').value = _('#'+this.idPrefix+field+'_R').textContent;
+			}
+			try { this.verify(); } catch (e) { this.__printInfo('Error: ' + e, 'red'); }
+		}
+
+		/** Read fuses from workspace-write to target device. 
+		 */
+		async writeFuse() {
+			var efuse = 0, hfuse = 0, lfuse = 0;
+			for (const field in this.dev.efuse) {
+				if (_('#'+this.idPrefix+field+'_W').value == '-') {
+					this.__printInfo('Error: ' + field + ' has no value', 'red');
+					return;
+				}
+				efuse = (efuse << this.dev.efuse[field][0]) | _('#'+this.idPrefix+field+'_W').value;
+			}
+			for (const field in this.dev.hfuse) {
+				if (_('#'+this.idPrefix+field+'_W').value == '-') {
+					this.__printInfo('Error: ' + field + ' has no value', 'red');
+					return;
+				}
+				hfuse = (hfuse << this.dev.hfuse[field][0]) | _('#'+this.idPrefix+field+'_W').value;
+			}
+			for (const field in this.dev.lfuse) {
+				if (_('#'+this.idPrefix+field+'_W').value == '-') {
+					this.__printInfo('Error: ' + field + ' has no value', 'red');
+					return;
+				}
+				lfuse = (lfuse << this.dev.lfuse[field][0]) | _('#'+this.idPrefix+field+'_W').value;
+			}
+			this.__printInfo('Writing fuses: ' + dec2hex([efuse, hfuse, lfuse]));
+			await avr_spi.writeFuse(efuse, hfuse, lfuse);
+			this.__printInfo('Fuses ' + dec2hex([efuse, hfuse, lfuse]) + ' write finished');
+		}
+	}
+	var nvme = new NVME_SPI({
+		'table_layout': _('#nvme_layout'),
+		'table_workspace': _('#nvme_workspace'),
+		'info': _('#nvme_info')
+	}, 'NVME_');
+
+	/** Local file access */
+	class LocalFile extends Infoable {
+		dom = {
+			'actionRead': null,			//Button: Read data from target to content display
+			'actionWrite': null,			//Button: Write data from content display to target
+			'actionLoad': null,			//Button: Load data from local file to content display
+			'actionSave': null,			//Button: Save data in content display to local file
+			'localFileSelector': null,		//Button: Select local file handler
+			'localFileSynchCheckbox': null,		//Checkbox: Listen for local file change, auto load data from local file to content display, and write to target
+			'header': null,				//Textarea: Current displayed content
+			'addr': null,				//Textarea: Display content address
+			'content': null				//Textarea: Display content
+		};
+		func_poll;		//Time event to check local file change
+		fileSynchHandler;	//Local file handler
+		fileSynchTimestamp;	//Last local file update
+		wordCount;		//Number of word in target
+		pageSize;		//Number of word in one page
+		pageCount;		//Number of page
+		
+		/** Create a local file synch object. 
+		 * @param {JSON} dom HTML DOM list
+		 * @param {Number} pollWait Period to check change on local file, use 0 to disable (ms) (polling to to find file change, JS for now does not have change trigger)
+		 */
+		constructor(
+			dom,
+			pollWait
+		) {
+			super(dom.info);
+			this.dom = dom;
+			this.__setTimeEvent(pollWait);
+			this.__setDomEvent();
+			this.setSize(0, 1);
+		}
+		__setTimeEvent(delay) {
+			clearInterval(this.func_poll);
+			if (!delay) return;
+			this.func_poll = setInterval(async () => {
+				this.dom.actionLoad.disabled  = this.dom.localFileSynchCheckbox.checked || !this.fileSynchHandler; //Disable the load button if synch on
+				if (!this.fileSynchHandler || !this.dom.localFileSynchCheckbox.checked)return; // Listen local file change
+				try {
+					var file = await this.fileSynchHandler.getFile();
+					if (file.lastModified == this.fileSynchTimestamp) return;
+					var data = new Uint8Array(await file.arrayBuffer());
+					this.fileSynchTimestamp = file.lastModified;
+					this.load();
+				} catch (e) {
+					console.log(e);
+				}
+			}, delay);
+		}
+		__setDomEvent() {
+			this.dom.localFileSelector.onclick =	async () => {this.select()};
+			this.dom.actionLoad.onclick =		async () => {this.load()};
+			this.dom.actionSave.onclick =		async () => {this.save()};
+			this.dom.actionRead.onclick =		async () => {this.read()};
+			this.dom.actionWrite.onclick =		async () => {this.write()};
+		}
+
+		/** Set workspace size. 
+		 * @param {Number} totalSize Target device memory size (byte)
+		 * @param {Number} wordSize Word size of the memory, 1 for 8-bit (data), 2 for 16-bit (program)
+		 */
+		setSize(totalSize, wordSize) {
+			var height = totalSize / 32;
+			for (var i = 0, addrset = ''; i < height; i++) addrset += (i*2/wordSize).toString(16)+"\n";
+			this.dom.addr.value = addrset;
+			this.dom.addr.rows = height;
+			this.dom.content.rows = height;
+			this.wordCount = totalSize / wordSize;
+		}
+
+		/** Clear the content in workspace. 
+		 */
+		clear() {
+			this.dom.addr.value = '';
+			this.dom.content.value = '';
+		}
+
+		/** Select local file on computer. 
+		 */
+		async select() {
+			this.fileSynchHandler = (await window.showOpenFilePicker())[0];
+			this.fileSynchTimestamp = 0;
+			this.dom.localFileSelector.textContent = 'LoadSrc: '+ this.fileSynchHandler.name;
+		}
+
+		/** Load file from computer to workspace. 
+		 * If file change polling is enable, this will be performed automatically. 
+		 */
+		async load() {
+			var file = await this.fileSynchHandler.getFile();
+			var data = new Uint8Array(await file.arrayBuffer());
+			this.fileSynchTimestamp = file.lastModified;
+			var decoded = '';
+			if (data.length) {
+				for (var x of data)
+					decoded += dec2hex(x);
+			}
+			this.dom.header.value = 'Local';
+			this.dom.content.value = decoded;
+			this.__printInfo('Local file loaded to content display');
+		}
+
+		/** Save the content in workspace to local file. 
+		 */
+		async save() {
+			var data = this.dom.content.value.match(/.{2}/g);
+			var coded = [];
+			if (data && data.length) {
+				for (var x of data)
+					coded.push(Number('0x'+x));
+			}
+			var dom = createElement('a');
+			dom.href = URL.createObjectURL(new Blob([(new Uint8Array(coded)).buffer], {type: 'octet/stream'}));
+			dom.download = this.dom.actionSave.dataset.filename;
+			dom.click();
+			this.__printInfo('Display content saved to local file');
+		}
+	}
+	var eepromFile = new LocalFile({
+		'actionRead':			_('#eeprom_actionRead'),
+		'actionWrite':			_('#eeprom_actionWrite'),
+		'actionLoad':			_('#eeprom_actionLoad'),
+		'actionSave':			_('#eeprom_actionSave'),
+		'localFileSelector':		_('#eeprom_synchFileSelector'),
+		'localFileSynchCheckbox':	_('#eeprom_synchCheckbox'),
+		'info':				_('#eeprom_info'),
+		'header':			_('#eeprom_header'),
+		'addr':				_('#eeprom_addr'),
+		'content':			_('#eeprom_content')
+	}, 0, 1, 200);
+	eepromFile.read = async () => {
+		eepromFile.dom.content.value = '';
+		eepromFile.__printInfo('Read content from target');
+		await avr_spi.readEep(0, eepromFile.wordCount, (a, d) => {
+			eepromFile.dom.content.value += dec2hex(d);
+			eepromFile.__printInfo('Read content from target '+ a +' / ' + eepromFile.wordCount);
+		});
+		eepromFile.__printInfo('Target content loaded to content display');
+	}
+	eepromFile.write = async () => {
+		const txt = eepromFile.dom.content.value;
+		if (txt.match(/[^0-9A-Fa-f]/)) {
+			const msg = 'Bad character (0-9A-Fa-f) at ' + txt.match(/[^0-9A-Fa-f]/).index;
+			eepromFile.__printInfo(msg, 'red');
+			throw new Error(msg);
+		}
+		var data = [];
+		eepromFile.dom.content.value.match(/[0-9A-Fa-f]{2}/g).map(x => data.push(Number('0x'+x)));
+		console.log(data);
+		await avr_spi.writeEep(0,data, (a) => {
+			eepromFile.__printInfo('Write content to target '+ a +' / ' + eepromFile.wordCount);
+		});
+	}
+	var flashFile = new LocalFile({
+		'actionRead':			_('#flash_actionRead'),
+		'actionWrite':			_('#flash_actionWrite'),
+		'actionLoad':			_('#flash_actionLoad'),
+		'actionSave':			_('#flash_actionSave'),
+		'localFileSelector':		_('#flash_synchFileSelector'),
+		'localFileSynchCheckbox':	_('#flash_synchCheckbox'),
+		'info':				_('#flash_info'),
+		'header':			_('#flash_header'),
+		'addr':				_('#flash_addr'),
+		'content':			_('#flash_content')
+	}, 0, 2, 200);
+	flashFile.read = async () => {
+		flashFile.dom.content.value = '';
+		flashFile.__printInfo('Read content from target');
+		await avr_spi.readCode(0, flashFile.wordCount, (a, d) => {
+			flashFile.dom.content.value += dec2hex(d);
+			flashFile.__printInfo('Read content from target '+ a +' / ' + flashFile.wordCount);
+		});
+		flashFile.__printInfo('Target content loaded to content display');
+	}
+</script></html>
