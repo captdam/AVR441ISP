@@ -120,8 +120,8 @@
 		
 		nvme.reset(avr_nvme[avr_sig[info.sig][1]]);
 		nvme.__printInfo('Signature: ' + info.sig + ' Model: ' + avr_sig[info.sig][0] + ' NVME: ' + avr_sig[info.sig][1] + ' Cal=' + info.cal);
-		flashFile.setSize(avr_sig[info.sig][2], 2);
-		eepromFile.setSize(avr_sig[info.sig][3], 1);
+		flashFile.setSize(avr_sig[info.sig][2], 2, avr_sig[info.sig][4], avr_sig[info.sig][5]);
+		eepromFile.setSize(avr_sig[info.sig][3], 1, avr_sig[info.sig][6], avr_sig[info.sig][7]);
 	};
 
 	/** Earse SPI AVR device to remove lock bits. 
@@ -165,11 +165,21 @@
 			}
 			return d;
 		},
-		'writeEep': async (addr, data, step) => { await _avr_spi.enable();
-			for (var i = 0; i < data.length; i++) {
-				await _avr_spi.writeEep(addr + i, data[i]);
-				step(i);
-				await new Promise((resolve) => {setTimeout(() => { resolve(); }, 5); })
+		'writeEep': async (addr, data, step, size) => { await _avr_spi.enable();
+			var paged = false;
+			for (;data.length;) {
+				if (size && addr % size == 0 && data.length >= size) { //support page mode, first word in page, data larger than page size
+					for (var i = 0; i < size; i++) {
+						await _avr_spi.loadEepPg(addr + i, data.shift());
+						addr++;
+					}
+					await _avr_spi.writeEepPg(addr);
+				} else {
+					await _avr_spi.writeEep(addr, data.shift());
+					addr++;
+				}
+				step(addr);
+				await new Promise((resolve) => {setTimeout(() => { resolve(); }, 5); });
 			}
 		},
 		'readCode': async (addr, len, step) => { await _avr_spi.enable();
@@ -194,7 +204,7 @@
 		'loadCodeEAdd':	(a) => { return xhr_put(0x4D000000 | a << 8); },
 		'loadCodePgH':	(a, d) => { return xhr_put(0x48000000 | a << 8 | d); },
 		'loadCodePgL':	(a, d) => { return xhr_put(0x40000000 | a << 8 | d); },
-		'loadEepPg':	(a, d) => { return xhr_put(0xC1000000 | a << 8 | d); },
+		'loadEepPg':	async (a, d) => { return await uart.exchange([0xC1, a >> 8, a, d]); },
 		'readCodeH':	async (a) => { return await uart.exchange([0x28, a >> 8, a, 0x00]); },
 		'readCodeL':	async (a) => { return await uart.exchange([0x20, a >> 8, a, 0x00]); },
 		'readEep':	async (a) => { return await uart.exchange([0xA0, a >> 8, a, 0x00]); },
@@ -206,7 +216,7 @@
 		'readCal':	async () => { return await uart.exchange([0x38, 0x00, 0x00, 0x00]); },
 		'writeCodePg':	(a) => { return xhr_put(0x4C000000 | a << 8); },
 		'writeEep':	async (a, d) => { return await uart.exchange([0xC0, a >> 8, a, d]); },
-		'writeEepPg':	(a) => { return xhr_put(0xC2000000 | a << 10) },
+		'writeEepPg':	async (a) => { return await uart.exchange([0xC2, a >> 8, a, 0x00]) },
 		'writeLock':	async (d) => { return await uart.exchange([0xAC, 0xE0, 0x00, d]); },
 		'writeFuseL':	async (d) => { return await uart.exchange([0xAC, 0xA0, 0x00, d]); },
 		'writeFuseH':	async (d) => { return await uart.exchange([0xAC, 0xA8, 0x00, d]); },
@@ -395,7 +405,7 @@
 			this.dev = dev;
 			this.__reset_layout();
 			this.__reset_workspace();
-			this.__printInfo('Layout created for ')
+			this.__printInfo('Layout created for ');
 		}
 		__reset_layout() {
 			for (const element in {'lock':this.dev.lock, 'efuse':this.dev.efuse, 'hfuse':this.dev.hfuse, 'lfuse':this.dev.lfuse}) {
@@ -653,10 +663,7 @@
 		 * @param {JSON} dom HTML DOM list
 		 * @param {Number} pollWait Period to check change on local file, use 0 to disable (ms) (polling to to find file change, JS for now does not have change trigger)
 		 */
-		constructor(
-			dom,
-			pollWait
-		) {
+		constructor(dom, pollWait) {
 			super(dom.info);
 			this.dom = dom;
 			this.__setTimeEvent(pollWait);
@@ -691,14 +698,18 @@
 		/** Set workspace size. 
 		 * @param {Number} totalSize Target device memory size (byte)
 		 * @param {Number} wordSize Word size of the memory, 1 for 8-bit (data), 2 for 16-bit (program)
+		 * @param {Number} pageSize Number of words in one page, use 0 if page-write is not supported
+		 * @param {Number} pageCount Number of page, use 0 if page-write is not supported
 		 */
-		setSize(totalSize, wordSize) {
+		setSize(totalSize, wordSize, pageSize, pageCount) {
 			var height = totalSize / 32;
 			for (var i = 0, addrset = ''; i < height; i++) addrset += (i*2/wordSize).toString(16)+"\n";
 			this.dom.addr.value = addrset;
 			this.dom.addr.rows = height;
 			this.dom.content.rows = height;
 			this.wordCount = totalSize / wordSize;
+			this.pageSize = pageSize;
+			this.pageCount = pageCount;
 		}
 
 		/** Clear the content in workspace. 
@@ -780,9 +791,7 @@
 		var data = [];
 		eepromFile.dom.content.value.match(/[0-9A-Fa-f]{2}/g).map(x => data.push(Number('0x'+x)));
 		console.log(data);
-		await avr_spi.writeEep(0,data, (a) => {
-			eepromFile.__printInfo('Write content to target '+ a +' / ' + eepromFile.wordCount);
-		});
+		await avr_spi.writeEep(0, data, a => eepromFile.__printInfo('Write content to target addr @' + a), this.pageSize);
 	}
 	var flashFile = new LocalFile({
 		'actionRead':			_('#flash_actionRead'),

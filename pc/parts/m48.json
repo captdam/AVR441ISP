@@ -1,6 +1,0 @@
-{
-	"lock": {"LB_PLACEHOLDER": [6, 63], "LB": [2, 3]},
-	"efuse": {"EFUSE_PLACEHOLDER": [7, 127], "SELFPRGEN": [1, 1]},
-	"hfuse": {"RSTDISBL": [1, 1], "DWEN": [1, 1], "SPIEN": [1, 0], "WDTON": [1, 1], "EESAVE": [1, 1], "BODLEVEL": [3, 7]},
-	"lfuse": {"CKDIV8": [1, 0], "CKOUT": [1, 1], "SUT": [2, 2], "CKSEL": [4, 2]}
-}
